@@ -9,6 +9,7 @@ import type { ServerRequest } from '@hermes/shared/json-rpc-channel'
 import type { SessionInfo } from '@hermes/shared/gateway-types'
 import { describe, expect, it } from 'vitest'
 
+import type { LaunchDevice } from '../config/env.js'
 import { Epoch } from '../core/epoch.js'
 import { durable, liveSessionId, NO_SESSION, type SessionIds, storedSessionId } from '../core/ids.js'
 import { adoptAll, type AdoptHost, adoptSteps, type Snapshot } from '../session/adopt.js'
@@ -258,13 +259,13 @@ function request(id: string, sid: string): ServerRequest {
   return { fail: () => undefined, id, method: 'approval.request', params: { session_id: sid }, respond: () => undefined }
 }
 
-/** A lifecycle on a fake shared gateway whose resumes answer when the test says. */
-function lifecycle() {
+/** A lifecycle on a fake shared gateway whose resumes answer when the test says (a device tab's with `device`). */
+function lifecycle(device?: LaunchDevice) {
   const gw = new FakeGateway()
   const log: string[] = []
   const answer = new Map<string, (r: Snapshot) => void>()
   gw.handlers.set('session.resume', p => new Promise(resolve => answer.set(String(p['session_id']), resolve)))
-  gw.handlers.set('session.detach', p => void log.push(`detach ${String(p['session_id'])}`))
+  gw.handlers.set('session.detach', p => void log.push(`detach ${String(p['session_id'])}${p['end_reason'] ? ` ${String(p['end_reason'])}` : ''}`))
   const state = new SessionState(() => undefined)
   const life = new SessionLifecycle(
     {
@@ -274,7 +275,7 @@ function lifecycle() {
       changed: () => void log.push('changed'),
       drain: () => void log.push('drain'),
       gw: gw.client,
-      launch: { create: {}, paneCwd: '', restored: false, resume: '', sessionCwd: '' },
+      launch: { create: {}, device, paneCwd: '', restored: false, resume: '', sessionCwd: '' },
       rename: () => Promise.resolve(),
       request: req => void log.push(`request ${req.id}`),
       sheets: { dropShared: () => undefined },
@@ -374,5 +375,25 @@ describe('SessionLifecycle', () => {
 
   it('starts sessionless', () => {
     expect(lifecycle().state.ref).toEqual(NO_SESSION)
+  })
+
+  it('closes a session it leaves, but a device tab only stops watching its topic’s', async () => {
+    for (const [device, closes] of [
+      [undefined, true],
+      [{ chatId: '1', id: 'fa-1', kind: 'field-ai-box', name: 'LG', sessionKey: 'k', threadId: '2' }, false]
+    ] as const) {
+      const t = lifecycle(device)
+      const first = t.life.resume(storedSessionId('a'))
+      await settle(t.gw)
+      t.reply('a')
+      await first
+      const next = t.life.resume(storedSessionId('b'))
+      await settle(t.gw)
+      t.reply('b')
+      await next
+      await t.life.leaveAll('tui_shutdown')
+      await settle(t.gw)
+      expect(t.log.filter(l => l.startsWith('detach'))).toEqual(closes ? ['detach a tui_close', 'detach b tui_shutdown'] : ['detach a', 'detach b'])
+    }
   })
 })

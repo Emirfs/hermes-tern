@@ -199,6 +199,20 @@ describe('readLaunchEnv', () => {
     expect(readLaunchEnv({ ...launch({ cwd: '' }), HOME: '' }, '/elsewhere')).toMatchObject({ cwd: '/elsewhere', home: '' })
   })
 
+  it('reads a device tab’s box, and no device for a broken one', () => {
+    const device = { chat_id: '5795068189', id: 'fa-61d44cb4', kind: 'field-ai-box', name: 'LG klima kutusu', session_key: 'agent:main:telegram:dm:5795068189:1232', thread_id: '1232' }
+    expect(readLaunchEnv({ HERMES_TERN_LAUNCH: JSON.stringify({ device, resume: '' }) }, '/x').device).toEqual({
+      chatId: '5795068189',
+      id: 'fa-61d44cb4',
+      kind: 'field-ai-box',
+      name: 'LG klima kutusu',
+      sessionKey: 'agent:main:telegram:dm:5795068189:1232',
+      threadId: '1232'
+    })
+    expect(readLaunchEnv({ HERMES_TERN_LAUNCH: JSON.stringify({ device: { name: 'x' } }) }, '/x').device).toBeUndefined()
+    expect(readLaunchEnv({ HERMES_TERN_LAUNCH: JSON.stringify({ device: null }) }, '/x').device).toBeUndefined()
+  })
+
   it('reads the process environment once', () => {
     expect(launchEnv()).toBe(launchEnv())
   })

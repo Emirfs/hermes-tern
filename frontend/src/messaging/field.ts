@@ -10,6 +10,7 @@ import { loose } from '../wire/schemas.js'
 
 export const DEVICES_METHOD = 'plugin.hermes-tern.field.devices'
 export const STATUS_METHOD = 'plugin.hermes-tern.field.status'
+export const SESSION_METHOD = 'plugin.hermes-tern.field.session'
 /** The skill a box's conversation runs with (the Telegram DM topics use it too). */
 export const FIELD_SKILL = 'field-device-chat'
 
@@ -134,6 +135,55 @@ export async function fieldStatus(gw: Requester, device: string): Promise<FieldS
 
   if (!r) {
     throw new Error('field.status answered in an unknown shape')
+  }
+
+  return r
+}
+
+/** What `field.session` says of a device tab's box: its topic's open session and the platform's heartbeat. */
+export interface DeviceSession {
+  /** The topic's open session; null while it has none. */
+  sessionId: string | null
+  sessionKey: string | null
+  /** The topic moved on from the session the tab named (a `session_reset`), not merely compressed it. */
+  rotated: boolean
+  /** How the named session ended (`session_reset`, `compression`, …), null while it is open. */
+  endedReason: string | null
+  online: boolean | null
+  /** Epoch ms of the last heartbeat. */
+  lastSeen: number | null
+}
+
+const sessionResult = z.object({
+  ended_reason: str,
+  last_seen: num,
+  online: loose(z.nullable(z.boolean())),
+  rotated: z.catch(z.boolean(), false),
+  session_id: str,
+  session_key: str
+})
+
+export function readDeviceSession(raw: unknown): DeviceSession | undefined {
+  const r = sessionResult.safeParse(raw)
+
+  return r.success
+    ? {
+        endedReason: r.data.ended_reason ?? null,
+        lastSeen: r.data.last_seen ? Math.round(r.data.last_seen * 1000) : null,
+        online: r.data.online ?? null,
+        rotated: r.data.rotated,
+        sessionId: r.data.session_id ?? null,
+        sessionKey: r.data.session_key ?? null
+      }
+    : undefined
+}
+
+/** `field.session`: box `device`'s topic session, and whether it replaced `current`. */
+export async function fieldSession(gw: Requester, device: string, current: string | null): Promise<DeviceSession> {
+  const r = readDeviceSession(await gw.request<unknown>(SESSION_METHOD, { device, ...(current ? { current } : {}) }))
+
+  if (!r) {
+    throw new Error('field.session answered in an unknown shape (is the hermes-tern plugin in the gateway current?)')
   }
 
   return r

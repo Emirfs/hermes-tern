@@ -20,6 +20,17 @@ The field panel discovers its transport from the configured `mcp_servers.field_a
 not flash firmware, enable RF transmission or move actuators. Device control stays in the agent's
 existing tools and approval flow. Connection status is not a device safety or emergency-stop signal.
 
+### Live device tabs (ESP)
+
+| Command | Purpose |
+| --- | --- |
+| `hermes tern --device <id\|alias\|name>` | The box's own Telegram-topic session, live: Telegram/cron turns stream in, what you type goes into the topic's FIFO (reply goes to the topic, its `channel_overrides` apply). Waits while the topic has no open session and follows a `session_reset` to the new one. A status line shows online/offline/last seen from read-only reads. |
+| `hermes tern --list-devices` | JSON array of boxes: `id, name, thread_id, session_key, session_id, platform` (no Tern pane needed) |
+| `hermes tern --esp-tabs [device]`, `/esp [device]` | Opens/focuses Tern's `ESP` session: one tab per box, named after it, running `--device <id>`; idempotent |
+| `/field` → Enter (Canlı sohbet) | Opens that box's live tab; N still starts a separate device chat |
+
+A device tab only watches: leaving it never closes the topic's session.
+
 ### Tasks and maintenance
 
 | Command | Purpose |
@@ -38,6 +49,26 @@ messaging. Creating/listing backups does not stop the gateway.
 
 `/cron run <id>` runs the job synchronously through Hermes (up to the gateway's 600-second CLI
 request limit); it is not a fire-and-forget enqueue operation.
+
+### Kanban notifications and the peer mesh
+
+In the gateway process the plugin tails every board's `task_events` (read-only) and posts card
+events — created, assigned, started (claimed), completed, blocked, failed (gave up, crashed, timed
+out) — in Turkish to one Telegram topic, whoever created the card (CLI, `kanban_*` tools, workers,
+peers). The target is `<HERMES_HOME>/hermes-tern/kanban-notify.json`
+(`{"platform", "chat_id", "thread_id", "topic"}`); without it, or with `"dry_run": true`, messages go
+to `kanban-notify.log` beside it. The last handled event id per board is kept in
+`kanban-notify-state.json`, so a reload or restart neither replays nor repeats. Cards created with
+`--initial-status blocked` are announced as waiting for approval with their unblock command.
+
+`peer_list`, `peer_send(peer, text)` and `peer_ask(peer, text, timeout_s)` (toolset `hermes-tern`) let
+Hermes instances on different machines talk through a private GitHub repository (default
+`Emirfs/hermes-mesh`; its README documents the protocol) using the `gh` login's token, read at run
+time and never stored; no inbound port or VPN is needed. The machine's peer name and repository are in
+`<HERMES_HOME>/hermes-tern/peer.json` (created with the lower-cased host name; machine-local, never
+synced). The gateway polls the repository every 30 seconds with ETags; an inbound `ask` becomes a local
+kanban card (`ask_assignee`, default `kodcu`) and the card's result is posted back as the reply; an
+inbound note reaches the Kanban topic. Only comments by the repository owner's account are read.
 
 
 

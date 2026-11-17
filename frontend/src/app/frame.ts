@@ -5,6 +5,7 @@
 
 import type { Hud } from '../chrome/hud.js'
 import type { Sidebar } from '../chrome/sidebar.js'
+import type { DeviceLive } from '../extras/device.js'
 import type { Completion } from '../overlays/completion.js'
 import type { Overlay } from '../overlays/overlay.js'
 import type { Pet } from '../pet/store.js'
@@ -25,6 +26,8 @@ export interface FrameCx extends DockSources {
   readonly transcript: Pick<Transcript, 'currentTodos' | 'entries'>
   readonly sidebar: Pick<Sidebar, 'node'>
   readonly pet?: Pick<Pet, 'view'>
+  /** A device tab's box status line (extras/device.tsx), above the dock's own rows. */
+  readonly device?: Pick<DeviceLive, 'node'> | undefined
   /** Tern has the aside feature: the session sidebar docks at the right edge. */
   aside(): boolean
   /** The dock's buttons, bound once. */
@@ -53,7 +56,7 @@ export function drawFrame(cx: FrameCx, now = Date.now()) {
   }
 
   cx.surface.render({
-    dock: [...(cx.pet?.view ? [petNode(cx.pet.view)] : []), ...dockNodes(dockModel(cx, now), cx.actions)],
+    dock: [...(cx.pet?.view ? [petNode(cx.pet.view)] : []), ...(cx.device ? [cx.device.node(now)] : []), ...dockNodes(dockModel(cx, now), cx.actions)],
     layer: [
       ...(cx.aside() ? [cx.sidebar.node('layer.sidebar')].filter(n => n !== null) : []),
       ...cx.overlays.map(o => o.node(`layer.${o.key}`)),

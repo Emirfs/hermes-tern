@@ -1,6 +1,7 @@
 """field.py against a fake field-ai-box host folder: fake transport modules, no broker, no box."""
 
 import json
+import sqlite3
 import sys
 import threading
 import textwrap
@@ -10,6 +11,7 @@ import types
 import pytest
 
 from hermes_tern_plugin.backend.gateway import field, messaging
+from hermes_tern_plugin.backend.shared import field_boxes
 
 DEVICES = {"fa-61d44cb4": {"key": "00" * 32, "label": "field-ai-box", "name": "LG klima kutusu"},
            "fa-7ae9b284": {"key": "11" * 32, "label": "mhi-vrf-gateway", "name": "MHI VRF gateway"}}
@@ -211,3 +213,106 @@ def test_usb_transport_reads_over_the_cable_with_the_same_read_only_commands(box
     out = field.status({"device": "fa-61d44cb4"})
     assert out["reads"] == {} and out["errors"] == {"device": "the box on the USB cable is fa-7ae9b284, not fa-61d44cb4"}
     sys.modules.pop("field_ai_link", None)
+
+
+# ── Device tabs: the topic's open session (shared/field_boxes.py, field.session) ─────────────────
+
+LG_KEY = "agent:main:telegram:dm:5795068189:1232"
+MHI_KEY = "agent:main:telegram:dm:5795068189:1409"
+
+
+def seed(home, rows):
+    """A state.db whose sessions table has the columns the device tab reads, holding ``rows``."""
+    conn = sqlite3.connect(home / "state.db")
+    conn.execute("CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, source TEXT, session_key TEXT, chat_id TEXT, "
+                 "chat_type TEXT, thread_id TEXT, started_at REAL, ended_at REAL, end_reason TEXT, parent_session_id TEXT)")
+    for r in rows:
+        conn.execute("INSERT OR REPLACE INTO sessions VALUES (?,?,?,?,?,?,?,?,?,?)",
+                     (r["id"], r.get("source", "telegram"), r["key"], r["key"].split(":")[-2], "dm", r["key"].split(":")[-1],
+                      r["at"], r.get("ended"), r.get("reason"), r.get("parent")))
+    conn.commit()
+    conn.close()
+
+
+def test_a_device_is_named_by_id_alias_or_part_of_its_name(box):
+    devices = json.loads((box.repo / "private" / "devices.json").read_text(encoding="utf-8"))
+    devices["fa-7ae9b284"]["aliases"] = ["vrf", 3]
+    (box.repo / "private" / "devices.json").write_text(json.dumps(devices), encoding="utf-8")
+    rows = field_boxes.boxes(box.config)
+    assert "key" not in json.dumps(rows)
+    pick = lambda q: field_boxes.resolve_device(q, rows)["id"]  # noqa: E731
+    assert pick("fa-61d44cb4") == pick("FA-61D44CB4") == "fa-61d44cb4"
+    assert pick("VRF") == pick("mhi-vrf-gateway") == "fa-7ae9b284"
+    assert pick("lg klima kutusu") == "fa-61d44cb4"
+    assert pick("fa-7a") == "fa-7ae9b284"
+    assert pick("klima") == "fa-61d44cb4" and pick("mhi") == "fa-7ae9b284"
+    with pytest.raises(LookupError, match="several devices"):
+        pick("fa-")
+    with pytest.raises(LookupError, match="no device 'daikin'; known: fa-61d44cb4"):
+        pick("daikin")
+    with pytest.raises(LookupError):
+        pick("  ")
+
+
+def test_a_topic_without_an_open_session_has_its_key_and_no_session(box):
+    home = messaging.hermes_home()
+    rows = {b["id"]: b for b in field_boxes.boxes(box.config)}
+    # No state.db yet, then one where the topic's last session ended.
+    mhi = field_boxes.topic_session(home, rows["fa-7ae9b284"])
+    assert (mhi["session_id"], mhi["session_key"], mhi["thread_id"]) == (None, MHI_KEY, 1409)
+    seed(home, [{"id": "s1", "key": MHI_KEY, "at": 1.0, "ended": 2.0, "reason": "session_reset"}])
+    assert field_boxes.topic_session(home, rows["fa-7ae9b284"])["session_id"] is None
+
+
+def test_the_open_session_is_the_newest_unended_row_of_the_topic(box):
+    home = messaging.hermes_home()
+    seed(home, [{"id": "old", "key": LG_KEY, "at": 1.0, "ended": 2.0, "reason": "session_reset"},
+                {"id": "now", "key": LG_KEY, "at": 3.0, "parent": "old"},
+                {"id": "other", "key": MHI_KEY, "at": 9.0},
+                {"id": "cli", "key": LG_KEY, "at": 10.0, "source": "cli"}])
+    lg = {b["id"]: b for b in field_boxes.boxes(box.config)}["fa-61d44cb4"]
+    # The topics file names no chat: its thread alone finds the rows, and their key names the topic.
+    assert lg["chat_id"] is None
+    out = field_boxes.topic_session(home, lg)
+    assert (out["session_id"], out["session_key"], out["rotated"], out["ended_reason"]) == ("now", LG_KEY, False, None)
+
+
+def test_a_session_reset_rotates_but_a_compression_does_not(box):
+    home = messaging.hermes_home()
+    mhi = {b["id"]: b for b in field_boxes.boxes(box.config)}["fa-7ae9b284"]
+    seed(home, [{"id": "a", "key": MHI_KEY, "at": 1.0, "ended": 2.0, "reason": "compression"},
+                {"id": "b", "key": MHI_KEY, "at": 2.0, "parent": "a"}])
+    out = field_boxes.topic_session(home, mhi, current="a")
+    assert (out["session_id"], out["rotated"], out["ended_reason"]) == ("b", False, "compression")
+    seed(home, [{"id": "b", "key": MHI_KEY, "at": 2.0, "parent": "a", "ended": 5.0, "reason": "session_reset"},
+                {"id": "c", "key": MHI_KEY, "at": 5.0, "parent": "b"}])
+    out = field_boxes.topic_session(home, mhi, current="a")
+    assert (out["session_id"], out["rotated"]) == ("c", True)
+    out = field_boxes.topic_session(home, mhi, current="b")
+    assert (out["session_id"], out["rotated"], out["ended_reason"]) == ("c", True, "session_reset")
+    assert field_boxes.topic_session(home, mhi, current="c")["rotated"] is False
+
+
+def test_list_devices_is_the_c1_json_array(box):
+    home = messaging.hermes_home()
+    seed(home, [{"id": "now", "key": LG_KEY, "at": 3.0}])
+    assert field_boxes.listing(home, box.config) == [
+        {"id": "fa-61d44cb4", "name": "LG klima kutusu", "thread_id": 1232, "session_key": LG_KEY, "session_id": "now",
+         "platform": "telegram"},
+        {"id": "fa-7ae9b284", "name": "MHI VRF gateway", "thread_id": 1409, "session_key": MHI_KEY, "session_id": None,
+         "platform": "telegram"}]
+
+
+def test_the_session_rpc_follows_the_topic_and_adds_the_heartbeat(box, monkeypatch):
+    home = messaging.hermes_home()
+    seed(home, [{"id": "s1", "key": MHI_KEY, "at": 1.0, "ended": 2.0, "reason": "session_reset"},
+                {"id": "s2", "key": MHI_KEY, "at": 2.0, "parent": "s1"}])
+    runner = types.SimpleNamespace(adapters={"fa": adapter({"fa-7ae9b284": False}, {"fa-7ae9b284": 7.0}, {})})
+    monkeypatch.setitem(sys.modules, "gateway.run_api", types.SimpleNamespace(_ACTIVE_RUNNER=runner))
+    out = field.session({"device": "fa-7ae9b284", "current": "s1"})
+    assert out["session_id"] == "s2" and out["rotated"] is True and out["ended_reason"] == "session_reset"
+    assert out["online"] is False and out["last_seen"] == 7.0 and out["name"] == "MHI VRF gateway"
+    assert field.session({"device": "fa-7ae9b284"})["rotated"] is False
+    for bad in ({"device": "fa-unknown"}, {"device": "../x"}, {"device": "fa-7ae9b284", "current": 3}):
+        with pytest.raises(ValueError):
+            field.session(bad)

@@ -1,9 +1,13 @@
-// /field: provisioned boxes, their platform heartbeat, and a read-only status preview. Enter starts a
-// new chat about the selected device, primed with field-device-chat. R re-reads that device's status.
+// /field: provisioned boxes, their platform heartbeat, and a read-only status preview. Enter (Canlı sohbet)
+// opens the box's live tab in Tern's ESP session: its Telegram topic's own conversation, watched and
+// answerable there (extras/device.tsx). N starts a separate new chat about the box, primed with
+// field-device-chat. R re-reads that device's status.
 
 import type { ChatPorts } from '../app/ports.js'
+import { launchEnv } from '../config/env.js'
 import { optional } from '../core/assert.js'
 import { errorText } from '../core/errors.js'
+import { openEspTabs } from '../extras/device.js'
 import { answered, fieldDevices, type FieldDevice, type FieldDevices, fieldStatus, type FieldStatus, presence, primePrompt, statusLines } from '../messaging/field.js'
 import { relative } from '../view/format.js'
 
@@ -18,6 +22,15 @@ export async function chatWithDevice(host: FieldSheetHost, d: FieldDevice): Prom
   if (host.busy) throw new Error('Wait for the current turn to finish before starting a device chat.')
   await host.newSession(`${d.name} · ${d.id}`)
   host.control().submit(primePrompt(d))
+}
+
+/** The box's live tab: its Telegram topic's conversation in Tern's ESP session (`hermes tern --esp-tabs <id>`). */
+export async function liveDeviceTab(host: Pick<FieldSheetHost, 'changed' | 'transcript'>, d: FieldDevice,
+  open: typeof openEspTabs = openEspTabs): Promise<void> {
+  if (!d.topic) throw new Error(`${d.name} has no Telegram topic; N starts a separate device chat instead.`)
+  await open(launchEnv().hermes, d.id)
+  host.transcript.notice(`${d.name}: canlı sohbet sekmesi ESP oturumunda açıldı.`, 'success')
+  host.changed()
 }
 
 export function openField(host: FieldSheetHost, focus?: string) {
@@ -60,12 +73,22 @@ export function openField(host: FieldSheetHost, focus?: string) {
     host.close(overlay)
     void reportError(host.transcript, () => chatWithDevice(host, d))
   }
+  const live = () => {
+    const d = current()
+    if (!d) return
+    host.close(overlay)
+    void liveDeviceTab(host, d).catch((e: unknown) => {
+      host.transcript.notice(`Canlı sohbet açılamadı: ${errorText(e)}`, 'error')
+      host.changed()
+    })
+  }
   const overlay: Overlay = {
     key: 'field', modal: true,
     onClose: () => { closed = true; clearInterval(timer) },
     onKey: k => {
       if (k.name === 'escape') host.close(overlay)
-      else if (k.name === 'enter') chat()
+      else if (k.name === 'enter') live()
+      else if (k.name === 'n' && !k.ctrl && !k.meta && !k.alt && !k.shift) chat()
       else if (k.name === 'r' && !k.ctrl && !k.meta && !k.alt) { if (k.shift) void read(); else loadStatus(current(), true) }
       else selected = moveSelection(k, state?.devices.map(d => d.id) ?? [], selected) ?? selected
       return true
@@ -87,9 +110,9 @@ export function openField(host: FieldSheetHost, focus?: string) {
         columns={[{ id: 'online', head: 'Heartbeat', priority: 1 }, { id: 'seen', head: 'Last seen', format: 'dim', priority: 2 }]}
         order={list.map(d => d.id)} {...optional('selected', selected)} total={list.length}
         subtitle={[{ s: 'muted', t: state ? `Field AI platform: ${state.platformState ?? 'unknown'} · ${state.transport} · read-only status` : 'Read-only status' }]}
-        actions={[{ id: 'chat', label: 'New device chat', keys: ['enter'], primary: true }, { id: 'status', label: 'Read status', keys: ['r'] }, { id: 'refresh', label: 'Refresh list', keys: ['shift+r'] }, { id: 'close', label: 'Close', keys: ['esc'], end: true }]}
-        onAction={{ chat, close: () => host.close(overlay), refresh: () => void read(), status: () => loadStatus(d, true) }}
-        onSelect={ev => { selected = ev.item; host.changed() }} onActivate={ev => { selected = ev.item; chat() }}>
+        actions={[{ id: 'live', label: 'Canlı sohbet', keys: ['enter'], primary: true }, { id: 'chat', label: 'New device chat', keys: ['n'] }, { id: 'status', label: 'Read status', keys: ['r'] }, { id: 'refresh', label: 'Refresh list', keys: ['shift+r'] }, { id: 'close', label: 'Close', keys: ['esc'], end: true }]}
+        onAction={{ chat, close: () => host.close(overlay), live, refresh: () => void read(), status: () => loadStatus(d, true) }}
+        onSelect={ev => { selected = ev.item; host.changed() }} onActivate={ev => { selected = ev.item; live() }}>
         {d ? <col key="detail" gap="md">
           <text key="device" text={`${d.name} · ${d.id}`} wrap="word" />
           <text key="topic" text={d.topic ? `Telegram thread ${d.topic.threadId}: ${d.topic.name ?? ''}` : 'No Telegram topic mapped.'} wrap="word" />
@@ -100,7 +123,7 @@ export function openField(host: FieldSheetHost, focus?: string) {
             {statusLines(s).map((line, i) => <text key={`line-${i}`} text={line} wrap="word" />)}
             <md key="raw" text={`\`\`\`json\n${JSON.stringify(s.reads, null, 2)}\n\`\`\``} />
           </col> : null}
-          <text key="safety" text="This sheet only reads status. Enter opens a separate, device-bound chat with field-device-chat." wrap="word" />
+          <text key="safety" text="This sheet only reads status. Enter opens the box's live Telegram-topic tab in Tern's ESP session; N starts a separate chat with field-device-chat." wrap="word" />
         </col> : null}
       </picker>
     }

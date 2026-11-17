@@ -30,10 +30,10 @@ import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Optional
+from typing import Any, NoReturn, Optional
 
-from ..shared import sessions
-from . import panes
+from ..shared import field_boxes, sessions
+from . import esp_tabs, panes
 
 FRONTEND = Path(__file__).resolve().parents[2] / "frontend"
 
@@ -79,6 +79,11 @@ FLAGS: list[tuple[tuple[str, ...], dict[str, Any]]] = [
     (("--new",), dict(action="store_true",
                              help="a new session, where the pane would resume its last one")),
     (("-w", "--worktree"), dict(action="store_true", help="run the session in a new git worktree of this repository")),
+    (("--device",), dict(metavar="DEVICE", help="a field box's live Telegram-topic chat (its id, an alias or part of its name)")),
+    (("--list-devices",), dict(dest="list_devices", action="store_true",
+                               help="print the field boxes and their topic sessions as JSON, then exit")),
+    (("--esp-tabs",), dict(dest="esp_tabs", nargs="?", const=True, metavar="DEVICE",
+                           help="open or focus Tern's ESP session, a tab per field box (DEVICE's shown)")),
 ]
 
 
@@ -170,6 +175,80 @@ def pick_session(args: argparse.Namespace) -> Optional[str]:
     return None
 
 
+# ── Field boxes: device tabs ─────────────────────────────────────────────────────────────────
+
+
+def _fail(message: str) -> NoReturn:
+    print(f"hermes tern: {message}", file=sys.stderr)
+    sys.exit(1)
+
+
+def _profile() -> tuple[Path, dict[str, Any]]:
+    """This profile's home and its config.yaml, as Hermes reads them."""
+    from hermes_cli.config import load_config
+    from hermes_constants import get_hermes_home
+
+    return Path(get_hermes_home()), load_config() or {}
+
+
+def list_devices() -> None:
+    """``--list-devices``: each field box with its Telegram topic's key and open session, as a JSON array."""
+    try:
+        rows = field_boxes.listing(*_profile())
+    except Exception as exc:  # noqa: BLE001 - one line for any registry failure
+        _fail(f"cannot list the field devices: {exc}")
+    print(json.dumps(rows, indent=2))
+    sys.exit(0)
+
+
+def pick_device(query: str) -> dict[str, Any]:
+    """``--device``: the box ``query`` names, with its topic's key and open session (``topic_session``)."""
+    try:
+        home, config = _profile()
+        return field_boxes.topic_session(home, field_boxes.resolve_device(query, field_boxes.boxes(config)))
+    except Exception as exc:  # noqa: BLE001 - an unknown device, an unreadable registry: one line
+        _fail(str(exc))
+
+
+def _home_vars() -> dict[str, str]:
+    """``HERMES_HOME`` for a tab Tern starts in its own environment, unless it is the default home."""
+    home = os.environ.get("HERMES_HOME", "").strip()
+    if not home:
+        return {}
+    local = os.environ.get("LOCALAPPDATA")
+    default = Path(local) / "hermes" if os.name == "nt" and local else Path.home() / ".hermes"
+    with contextlib.suppress(OSError):
+        if os.path.normcase(os.path.realpath(home)) == os.path.normcase(os.path.realpath(default)):
+            return {}
+    return {"HERMES_HOME": home}
+
+
+def open_esp_tabs(focus: Any, hermes: SimpleNamespace) -> None:
+    """``--esp-tabs [DEVICE]``: Tern's ESP session with a tab per box (esp_tabs.py), then exit."""
+    try:
+        rows = field_boxes.boxes(_profile()[1])
+        shown = field_boxes.resolve_device(focus, rows)["id"] if isinstance(focus, str) else None
+        env, node = _home_vars(), node_binary()
+        opened = esp_tabs.open_tabs(
+            rows, lambda box: esp_tabs.tab_program([*hermes.hermes_command(), "tern", "--device", box["id"]], env, node=node),
+            focus=shown)
+    except Exception as exc:  # noqa: BLE001 - tern's own message, or the registry's
+        _fail(f"cannot open the ESP tabs: {exc}")
+    for row in opened:
+        print(f"ESP: {row['name']} ({row['id']}) {row['state']}")
+    sys.exit(0)
+
+
+def device_spec(device: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    """What the frontend needs of a device tab's box (LaunchSpec.device)."""
+    if not device:
+        return None
+    thread = device.get("thread_id")
+    return {"id": device["id"], "name": device["name"], "kind": device.get("kind") or "",
+            "thread_id": "" if thread is None else str(thread), "chat_id": device.get("chat_id") or "",
+            "session_key": device.get("session_key") or ""}
+
+
 # ── What the frontend is handed ──────────────────────────────────────────────────────────────
 
 
@@ -230,13 +309,14 @@ def node_binary() -> Optional[str]:
 
 
 def launch_spec(args: argparse.Namespace, resume: Optional[str], restored: Optional[str], launch_cwd: str,
-                hermes: SimpleNamespace, session_file: str) -> LaunchSpec:
+                hermes: SimpleNamespace, session_file: str, device: Optional[dict[str, Any]] = None) -> LaunchSpec:
     cwd = os.getcwd()
     return LaunchSpec(
         hermes=list(hermes.hermes_command()), session_file=session_file, cwd=cwd, pane_cwd=launch_cwd,
         create=create_options(args, hermes.shell_client_env()), session_cwd=cwd if _local_terminal() else "",
         resume=resume or "", restored=bool(restored), query=_opt(args, "query") or "", image=_opt(args, "image") or "",
-        tool_progress="verbose" if _opt(args, "verbose") else "off" if _opt(args, "quiet") else "")
+        tool_progress="verbose" if _opt(args, "verbose") else "off" if _opt(args, "quiet") else "",
+        device=device_spec(device))
 
 
 def frontend_env(spec: LaunchSpec) -> dict[str, str]:
@@ -282,6 +362,10 @@ class LaunchSpec:
     """``--image``: an absolute path, attached to the first prompt."""
     tool_progress: str = ""
     """``verbose`` (``-v``) or ``off`` (``-Q``), pinned on each new session; "" keeps the profile's."""
+    device: Optional[dict[str, Any]] = None
+    """``--device``: the field box whose Telegram-topic session the pane shows and follows (``id``, ``name``,
+    ``kind``, ``thread_id``, ``chat_id``, ``session_key``); ``resume`` is that topic's open session, "" while
+    it has none (the pane then waits for one instead of starting a session)."""
 
 
 def _shown_session(session_file: str) -> Optional[str]:
@@ -292,11 +376,15 @@ def _shown_session(session_file: str) -> Optional[str]:
 
 
 def run(args: argparse.Namespace) -> None:
+    if _opt(args, "list_devices"):
+        list_devices()
     bundle = FRONTEND / "dist" / "entry.js"
     if not bundle.is_file():
         print(f"hermes tern: {bundle} is missing; reinstall the plugin", file=sys.stderr)
         sys.exit(1)
     hermes = hermes_api()
+    if (esp := _opt(args, "esp_tabs")) is not None:
+        open_esp_tabs(esp, hermes)
     if image := _opt(args, "image"):
         # Read here: a resume may move to the session's folder.
         args.image = os.path.abspath(os.path.expanduser(image))
@@ -306,8 +394,13 @@ def run(args: argparse.Namespace) -> None:
         print("hermes tern: Node.js was not found; install it from https://nodejs.org (`hermes doctor` shows how)",
               file=sys.stderr)
         sys.exit(1)
-    resume = pick_session(args)
-    restored = panes.plan(fresh=bool(_opt(args, "new")), explicit=bool(resume))
+    device = None
+    if query := _opt(args, "device"):
+        if _opt(args, "resume") or _opt(args, "continue_last") or _opt(args, "worktree"):
+            _fail("--device shows the device's own topic session; leave out -r, -c and -w")
+        device = pick_device(query)
+    resume = device["session_id"] if device else pick_session(args)
+    restored = panes.plan(fresh=bool(_opt(args, "new")), explicit=bool(resume) or device is not None)
     resume = restored or resume
     worktree = None
     if _opt(args, "worktree"):
@@ -326,7 +419,7 @@ def run(args: argparse.Namespace) -> None:
     try:
         fd, session_file = tempfile.mkstemp(prefix="hermes-tern-session-", suffix=".json")
         os.close(fd)
-        env = frontend_env(launch_spec(args, resume, restored, launch_cwd, hermes, session_file))
+        env = frontend_env(launch_spec(args, resume, restored, launch_cwd, hermes, session_file, device))
         try:
             code = subprocess.call([node, "--expose-gc", str(bundle)], env=env)
         except KeyboardInterrupt:

@@ -26,9 +26,16 @@ export class SessionViews {
    * shared gateway, the one that detaches, answers with one id for both.
    */
   readonly #detaching = new Map<DurableSessionId, Promise<unknown>>()
+  /**
+   * Whether leaving tells the owner this view closes the conversation (its end reason). A device tab's
+   * view only watches a messaging topic's session: its leaving must not close it (the owner would end its
+   * async delegations, gateway/session_viewer_close.py close_viewer_session), so it leaves without one.
+   */
+  readonly #closes: boolean
 
-  constructor(gw: ViewsGateway) {
+  constructor(gw: ViewsGateway, { closes = true }: { closes?: boolean } = {}) {
     this.#gw = gw
+    this.#closes = closes
   }
 
   /** Takes the ids of an adopted snapshot `r`, keeping its subscription (the shared gateway's). */
@@ -66,7 +73,7 @@ export class SessionViews {
     }
 
     this.#subscriptions.delete(sid)
-    await this.#detach(sid, subscription, endReason)
+    await this.#detach(sid, subscription, this.#closes ? endReason : undefined)
   }
 
   /**

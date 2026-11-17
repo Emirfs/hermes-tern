@@ -18,6 +18,7 @@ import { Disposables } from '../core/disposables.js'
 import { Attachments } from '../draft/attachments.js'
 import { Composer } from '../draft/composer.js'
 import type { Presses } from '../draft/keys.js'
+import { DeviceLive } from '../extras/device.js'
 import type { Warned } from '../gateway/handlers/chrome.js'
 import { Media } from '../media.js'
 import type { BackgroundProcess, Subagent } from '../model.js'
@@ -273,8 +274,23 @@ export function chatStores(chat: ChatPorts, { act, gw, launch, petFrame, setting
     gw,
     notice: text => chat.notice(text, 'warning')
   })
+  /** A device tab's follower of its Telegram topic and the box's status line (`hermes tern --device`). */
+  const device = launch.device
+    ? new DeviceLive(
+        {
+          canSwitch: () => canSwitch(act().gates()),
+          changed,
+          device: launch.device,
+          gw,
+          notice: (text, tone) => chat.notice(text, tone),
+          resume: id => life.resume(id),
+          shown: () => session.ref.stored
+        },
+        launch.resume
+      )
+    : undefined
 
-  return { ...shared, attachments, completion, cron, life, pet, programStatus, router, stack, theme, viewer, warned, welcome }
+  return { ...shared, attachments, completion, cron, device, life, pet, programStatus, router, stack, theme, viewer, warned, welcome }
 }
 
 /** Stops what the stores run on their own: every timer, the polls and the sidebar's reads. */
@@ -289,4 +305,5 @@ export function disposeStores(s: ChatStores) {
   s.sidebar.dispose()
   s.cron.dispose()
   s.pet.dispose()
+  s.device?.dispose()
 }

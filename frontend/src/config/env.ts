@@ -20,6 +20,10 @@ const text = z.catch(z.string(), '')
 const launchSpec = z.object({
   create: z.catch(z.record(z.string(), z.unknown()), {}),
   cwd: text,
+  device: z.catch(
+    z.nullable(z.object({ chat_id: text, id: z.string(), kind: text, name: z.string(), session_key: text, thread_id: text })),
+    null
+  ),
   hermes: z.catch(z.optional(hermesCommand), undefined),
   image: text,
   pane_cwd: text,
@@ -30,6 +34,18 @@ const launchSpec = z.object({
   session_file: text,
   tool_progress: text
 })
+
+/** `hermes tern --device`: the field box whose Telegram-topic session this pane shows and follows. */
+export interface LaunchDevice {
+  readonly id: string
+  readonly name: string
+  /** devices.json's label (`field-ai-box`, `mhi-vrf-gateway`, …). */
+  readonly kind: string
+  /** Its Telegram DM topic: the thread, the chat ('' when the config names none) and the session key. */
+  readonly threadId: string
+  readonly chatId: string
+  readonly sessionKey: string
+}
 
 /** What the launcher said at startup. Every string is '' when the launch does not set it. */
 export interface LaunchEnv {
@@ -61,6 +77,11 @@ export interface LaunchEnv {
   readonly paneCwd: string
   /** The launcher resumes the pane's conversation after its program died. */
   readonly restored: boolean
+  /**
+   * `--device`: the box whose topic session this pane shows (`resume`, '' while the topic has none: the pane
+   * waits for one instead of starting a session) and follows when the topic moves to a new session.
+   */
+  readonly device: LaunchDevice | undefined
 }
 
 /**
@@ -75,6 +96,16 @@ export function readLaunchEnv(env: NodeJS.ProcessEnv = process.env, cwd: string 
   return Object.freeze({
     create: Object.freeze({ ...spec.create }),
     cwd: launchCwd,
+    device: spec.device
+      ? Object.freeze({
+          chatId: spec.device.chat_id,
+          id: spec.device.id,
+          kind: spec.device.kind,
+          name: spec.device.name,
+          sessionKey: spec.device.session_key,
+          threadId: spec.device.thread_id
+        })
+      : undefined,
     eventLog: env['HERMES_TERN_EVENT_LOG'] ?? '',
     hermes: spec.hermes,
     home: env['HOME'],

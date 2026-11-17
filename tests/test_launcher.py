@@ -106,7 +106,7 @@ def test_the_frontend_gets_one_launch_spec(launched, monkeypatch, tmp_path):
         # Hermes' hermes_command() and shell_client_env(), unchanged.
         "hermes": ["/hermes"], "create": {"model": "x", "client_env": {"PATH": "/bin", "NODE_SESSION_AFFINITY": "lab"}},
         "session_file": spec(env)["session_file"], "cwd": here, "pane_cwd": here, "session_cwd": here,
-        "resume": "", "restored": False, "query": "hi", "image": "", "tool_progress": "verbose"}
+        "resume": "", "restored": False, "query": "hi", "image": "", "tool_progress": "verbose", "device": None}
     assert env["HERMES_HOME"] == str(tmp_path / "home")
     assert "--max-old-space-size=8192" in env["NODE_OPTIONS"]
 
@@ -274,3 +274,84 @@ def test_exported_launch_flags_reach_session_create(monkeypatch):
     monkeypatch.setenv("HERMES_ACCEPT_HOOKS", "true")
     monkeypatch.setenv("HERMES_IGNORE_RULES", "0")
     assert launcher.create_options(parse([]), {}) == {"yolo": True, "accept_hooks": True}
+
+
+# ── Field boxes: --list-devices, --device, --esp-tabs ──────────────────────────────────────────
+
+BOX = {"id": "fa-61d44cb4", "name": "LG klima kutusu", "kind": "field-ai-box", "aliases": [], "thread_id": "1232",
+       "chat_id": "5795068189"}
+KEY = "agent:main:telegram:dm:5795068189:1232"
+
+
+@pytest.fixture()
+def boxes(monkeypatch, tmp_path):
+    """One provisioned box whose topic's open session is `open["id"]` (None: the topic has none)."""
+    open_ = {"id": "s-open"}
+    monkeypatch.setattr(launcher, "_profile", lambda: (tmp_path, {}))
+    monkeypatch.setattr(launcher.field_boxes, "boxes", lambda config: [BOX])
+    monkeypatch.setattr(launcher.field_boxes, "topic_session", lambda home, box, current=None: {
+        **box, "thread_id": 1232, "session_key": KEY, "session_id": open_["id"], "platform": "telegram",
+        "rotated": False, "ended_reason": None})
+    return open_
+
+
+def test_list_devices_prints_the_json_array_and_needs_no_frontend(monkeypatch, capsys, tmp_path):
+    rows = [{"id": "fa-61d44cb4", "name": "LG klima kutusu", "thread_id": 1232, "session_key": KEY,
+             "session_id": None, "platform": "telegram"}]
+    monkeypatch.setattr(launcher, "FRONTEND", tmp_path / "missing")
+    monkeypatch.setattr(launcher, "_profile", lambda: (tmp_path, {"c": 1}))
+    monkeypatch.setattr(launcher.field_boxes, "listing", lambda home, config: rows if config == {"c": 1} else [])
+    with pytest.raises(SystemExit) as done:
+        launcher.run(parse(["--list-devices"]))
+    assert done.value.code == 0 and json.loads(capsys.readouterr().out) == rows
+
+
+def test_list_devices_says_why_it_cannot(monkeypatch, capsys, tmp_path):
+    monkeypatch.setattr(launcher, "_profile", lambda: (tmp_path, {}))
+    with pytest.raises(SystemExit) as done:
+        launcher.run(parse(["--list-devices"]))
+    assert done.value.code == 1 and "field-ai-box host folder is unknown" in capsys.readouterr().err
+
+
+def test_a_device_tab_resumes_its_topics_open_session(launched, boxes):
+    code, [(_, env)] = launched(parse(["--device", "klima"]))
+    assert code == 0
+    assert spec(env)["resume"] == "s-open"
+    assert spec(env)["device"] == {"id": "fa-61d44cb4", "name": "LG klima kutusu", "kind": "field-ai-box",
+                                   "thread_id": "1232", "chat_id": "5795068189", "session_key": KEY}
+
+
+def test_a_device_tab_waits_when_its_topic_has_no_open_session(launched, boxes, monkeypatch):
+    boxes["id"] = None
+    monkeypatch.setenv("TERN_PANE", "7")
+    monkeypatch.setattr(launcher.panes, "plan", lambda **kw: "pane-own" if not kw["explicit"] else None)
+    _, [(_, env)] = launched(parse(["--device", "fa-61d44cb4"]))
+    # Neither a new session nor the pane's last conversation: the frontend waits for the topic's.
+    assert spec(env)["resume"] == "" and spec(env)["device"]["id"] == "fa-61d44cb4"
+
+
+@pytest.mark.parametrize("argv, said", [(["--device", "daikin"], "no device 'daikin'"),
+                                        (["--device", "klima", "-r", "x"], "leave out -r, -c and -w")])
+def test_a_device_tab_refuses_an_unknown_box_or_another_session(launched, boxes, capsys, argv, said):
+    code, runs = launched(parse(argv))
+    assert code == 1 and runs == [] and said in capsys.readouterr().err
+
+
+def test_esp_tabs_open_a_tab_per_box_running_its_device_chat(launched, boxes, monkeypatch, capsys):
+    asked = []
+    monkeypatch.setattr(launcher.esp_tabs, "open_tabs", lambda rows, command, focus=None: asked.append(
+        (rows, [command(r) for r in rows], focus)) or [{"id": BOX["id"], "name": BOX["name"], "block": 3, "state": "opened"}])
+    monkeypatch.delenv("HERMES_HOME", raising=False)
+    code, runs = launched(parse(["--esp-tabs", "klima"]))
+    assert code == 0 and runs == []
+    assert asked == [([BOX], [["/hermes", "tern", "--device", "fa-61d44cb4"]], "fa-61d44cb4")]
+    assert "ESP: LG klima kutusu (fa-61d44cb4) opened" in capsys.readouterr().out
+
+
+def test_esp_tabs_carry_a_profiles_home(monkeypatch, tmp_path):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "profiles" / "kodcu"))
+    assert launcher._home_vars() == {"HERMES_HOME": str(tmp_path / "profiles" / "kodcu")}
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.setattr(launcher.os, "name", "nt")
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes"))
+    assert launcher._home_vars() == {}

@@ -1,4 +1,4 @@
-"""The field AI boxes (ESP32-S3 + STM32) for the pane's ``/field`` sheet, read only.
+"""The field AI boxes (ESP32-S3 + STM32) for the pane's ``/field`` sheet and its device tabs, read only.
 
 - ``plugin.hermes-tern.field.devices`` ``{}`` answers ``{"host", "transport", "platform", "devices": [...]}``: each
   provisioned box (id, name, kind), its Telegram DM topic, and what the gateway's ``fieldai`` platform last
@@ -8,9 +8,14 @@
   "elapsed_ms"}``: one READ-ONLY status query of one box over the transport the ``field_ai`` MCP server uses
   (the public MQTT broker with AES-GCM envelopes, or the USB cable when that server runs with
   ``FIELD_AI_TRANSPORT=usb``), under a hard timeout, on a worker thread.
+- ``plugin.hermes-tern.field.session`` ``{"device", "current"?}`` answers ``{"id", "name", "thread_id",
+  "session_key", "session_id", "rotated", "ended_reason", "online", "last_seen", ...}``: the open session of the
+  box's Telegram DM topic (the newest row of that chat and thread in state.db without ``ended_at``), which a
+  device tab (``hermes tern --device``) shows and follows. ``rotated``: the topic moved on from ``current`` (a
+  ``session_reset``), not merely compressed it. state.db is opened read-only.
 
-The box code is the user's field-ai-box checkout: its ``host/`` folder is the one config.yaml's
-``mcp_servers.field_ai.args`` names, and its modules are imported from there. Only the commands in ``READS``
+The box code is the user's field-ai-box checkout, read through ``shared/field_boxes.py``: its ``host/`` folder is
+the one config.yaml's ``mcp_servers.field_ai.args`` names, and its modules are imported from there. Only the commands in ``READS``
 (and the arm box's status read) ever reach a box: never RF transmit/config/mode, the OLED, the arm's motion,
 torque, limits or poses, tasks, firmware pushes or provisioning.
 """
@@ -18,7 +23,6 @@ torque, limits or poses, tasks, firmware pushes or provisioning.
 from __future__ import annotations
 
 import asyncio
-import importlib.util
 import logging
 import re
 import sys
@@ -29,12 +33,14 @@ from concurrent.futures import TimeoutError as FutureTimeout
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from ..shared.field_boxes import boxes, host_dir, host_module, registry, topic_session, topics
 from . import messaging
 
 logger = logging.getLogger(__name__)
 
 DEVICES_METHOD = "field.devices"
 STATUS_METHOD = "field.status"
+SESSION_METHOD = "field.session"
 PLATFORM = "fieldai"
 # The only box commands this module sends: (what the answer is filed under, the command). All read state.
 READS = (("esp", "STATUS"), ("stm32", "STM STATUS"), ("rf", "STM RF STATUS"))
@@ -45,7 +51,6 @@ QUERY_TIMEOUT_S = 25.0
 # Seconds the RPC waits past the query's own timeout for the worker to give its answer.
 GRACE_S = 2.0
 _DEVICE_ID = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
-_TOPIC_DEVICE = re.compile(r"·\s*(\S+)\s*$")
 
 # Guards the pool and the in-flight map; reentrant, as status() makes the pool while it holds it.
 _pool_lock = threading.RLock()
@@ -62,73 +67,12 @@ def _executor() -> ThreadPoolExecutor:
         return _pool
 
 
-def host_dir(config: dict[str, Any]) -> Optional[Path]:
-    """The field-ai-box ``host/`` folder: where config.yaml's ``field_ai`` MCP server script lives."""
-    servers = config.get("mcp_servers")
-    server = servers.get("field_ai") if isinstance(servers, dict) else None
-    args = server.get("args") if isinstance(server, dict) else None
-    for arg in args if isinstance(args, list) else ():
-        if isinstance(arg, str) and arg.endswith(".py"):
-            return Path(arg).parent
-    return None
-
-
 def transport(config: dict[str, Any]) -> str:
     """``usb`` or ``cloud``, as the ``field_ai`` MCP server reads its environment (cloud by default)."""
     server = (config.get("mcp_servers") or {}).get("field_ai") if isinstance(config.get("mcp_servers"), dict) else None
     env = server.get("env") if isinstance(server, dict) else None
     value = env.get("FIELD_AI_TRANSPORT") if isinstance(env, dict) else None
     return "usb" if isinstance(value, str) and value.lower() == "usb" else "cloud"
-
-
-def host_module(host: Path, name: str):
-    """Module ``name`` of the box code in ``host``: the one already imported from there (the fieldai platform
-    loads ``fieldai_cloud``), else imported by path. ``host`` goes on sys.path, as the MCP server puts it, so
-    the module's own plain imports (``import fieldai_proto``) resolve."""
-    loaded = sys.modules.get(name)
-    origin = getattr(loaded, "__file__", None)
-    if loaded is not None and origin and Path(origin).resolve().parent == host.resolve():
-        return loaded
-    if str(host) not in sys.path:
-        sys.path.insert(0, str(host))
-    spec = importlib.util.spec_from_file_location(name, host / f"{name}.py")
-    if spec is None or spec.loader is None:
-        raise ImportError(f"{name}.py not found in {host}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    try:
-        spec.loader.exec_module(module)
-    except BaseException:
-        sys.modules.pop(name, None)
-        raise
-    return module
-
-
-def registry(host: Path) -> dict[str, dict[str, str]]:
-    """The provisioned boxes, ``{id: {"name", "label"}}``, from the devices.json fieldai_cloud reads. Keys stay out."""
-    path = Path(host_module(host, "fieldai_cloud").DEFAULT_DEVICES)
-    raw = messaging.read_json(path) or {}
-    return {dev: {"name": str(info.get("name") or info.get("label") or dev), "label": str(info.get("label") or "")}
-            for dev, info in raw.items() if isinstance(info, dict)}
-
-
-def topics(host: Path, config: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    """Each box's Telegram DM topic ``{id: {"thread_id", "name", "chat_id"?}}``: the topics file fieldai_topics
-    writes, then config.yaml's dm_topics whose name ends with ``· <device id>``."""
-    out: dict[str, dict[str, Any]] = {}
-    try:
-        for dev, t in host_module(host, "fieldai_topics").load_topics().items():
-            if isinstance(t, dict) and t.get("thread_id") is not None:
-                out[dev] = {"thread_id": t["thread_id"], "name": t.get("name")}
-    except Exception as exc:
-        logger.debug("field: no topics file: %s", exc)
-    for t in messaging.topic_targets(config):
-        _, chat, thread = t["target"].split(":", 2)
-        if m := _TOPIC_DEVICE.search(t["name"]):
-            entry = out.setdefault(m.group(1), {"thread_id": thread, "name": t["name"]})
-            entry.setdefault("chat_id", chat)
-            entry["target"] = f"telegram:{chat}:{entry['thread_id']}"
-    return out
 
 
 def _adapter(home: Path) -> Any:
@@ -265,6 +209,21 @@ def status(params: dict, *, run: Callable[..., dict[str, Any]] = query, **_: Any
                 _inflight.pop(key, None)
 
 
+def session(params: dict, **_: Any) -> dict[str, Any]:
+    dev, current = params.get("device"), params.get("current")
+    if not isinstance(dev, str) or not _DEVICE_ID.match(dev):
+        raise ValueError("field.session needs the device id of a provisioned box")
+    if current is not None and not isinstance(current, str):
+        raise ValueError("field.session's current is a session id")
+    home = messaging.hermes_home()
+    rows = boxes(messaging.read_config(home))
+    box = next((b for b in rows if b["id"] == dev), None)
+    if box is None:
+        raise ValueError(f"unknown device {dev}; provisioned: {', '.join(b['id'] for b in rows) or 'none'}")
+    return {**topic_session(home, box, current or None), **heard(_adapter(home), dev)}
+
+
 def register(ctx) -> None:
     ctx.register_rpc(DEVICES_METHOD, devices)
     ctx.register_rpc(STATUS_METHOD, status)
+    ctx.register_rpc(SESSION_METHOD, session)

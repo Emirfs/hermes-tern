@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from ..shared import sessions
+from ..shared.field_boxes import topic_targets
 
 logger = logging.getLogger(__name__)
 
@@ -161,29 +162,6 @@ def directory_targets(directory: Optional[dict[str, Any]]) -> list[dict[str, str
             if isinstance(ident, (str, int)) and str(ident):
                 name = _text(chat.get("name")) or str(ident)
                 out.append(_target(f"{platform}:{ident}", platform, name, _text(chat.get("type")) or "chat", "directory"))
-    return out
-
-
-def topic_targets(config: dict[str, Any]) -> list[dict[str, str]]:
-    """The Telegram DM topics config.yaml declares (``platforms.telegram.extra.dm_topics``), as targets."""
-    out = []
-    telegram = (config.get("platforms") or {}).get("telegram") if isinstance(config.get("platforms"), dict) else None
-    extra = telegram.get("extra") if isinstance(telegram, dict) else None
-    groups = extra.get("dm_topics") if isinstance(extra, dict) else None
-    for group in groups if isinstance(groups, list) else ():
-        chat = group.get("chat_id") if isinstance(group, dict) else None
-        topics = group.get("topics") if isinstance(group, dict) else None
-        if chat is None or not isinstance(topics, list):
-            continue
-        for topic in topics:
-            thread = topic.get("thread_id") if isinstance(topic, dict) else None
-            if thread is None:
-                continue
-            target = _target(f"telegram:{chat}:{thread}", "telegram", _text(topic.get("name")) or f"topic {thread}",
-                             "topic", "dm_topics")
-            if _text(topic.get("skill")):
-                target["skill"] = topic["skill"]
-            out.append(target)
     return out
 
 

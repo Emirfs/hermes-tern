@@ -10,7 +10,8 @@ with no session flag resumes the conversation that pane showed (``panes.py``); `
 """
 
 from .backend.gateway import (
-    charts, field, figure_check, messaging, pull_requests, render_hints, snapshots, tern_env, viewers)
+    charts, field, figure_check, kanban_notify, messaging, peer, pull_requests, render_hints, snapshots, tern_env,
+    viewers)
 from .backend.launch import launcher
 
 
@@ -34,3 +35,7 @@ def register(ctx) -> None:
     snapshots.register(ctx)
     messaging.register(ctx)
     field.register(ctx)
+    # Kanban events of every creator to the Telegram "Kanban" topic, and the GitHub peer mesh (its tools
+    # everywhere, its poller in the gateway only).
+    kanban_notify.register(ctx)
+    peer.register(ctx)

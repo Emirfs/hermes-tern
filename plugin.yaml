@@ -9,7 +9,7 @@ license: MIT
 homepage: https://github.com/Emirfs/hermes-tern
 tags: [tern, tui, frontend]
 requires_hermes: ">=0.23.0"
-provides_tools: [link_pull_request, unlink_pull_request, list_pull_requests, write_review_guide]
+provides_tools: [link_pull_request, unlink_pull_request, list_pull_requests, write_review_guide, peer_list, peer_send, peer_ask]
 config_schema:
   enterprise_hosts:
     type: list

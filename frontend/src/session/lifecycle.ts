@@ -31,8 +31,11 @@ export interface LifecycleHost {
   readonly state: SessionState
   readonly transcript: Pick<Transcript, 'notice'>
   readonly sheets: Pick<PromptSheets, 'dropShared'>
-  /** The launcher's session to resume (the pane's own after a restart), and the folder a new session starts in. */
-  readonly launch: Pick<LaunchEnv, 'create' | 'paneCwd' | 'restored' | 'resume' | 'sessionCwd'>
+  /**
+   * The launcher's session to resume (the pane's own after a restart), the folder a new session starts in,
+   * and a device tab's box (which waits for its topic's session instead of starting one).
+   */
+  readonly launch: Pick<LaunchEnv, 'create' | 'device' | 'paneCwd' | 'restored' | 'resume' | 'sessionCwd'>
   /** Whether another live pane shows conversation `id` (the plugin knows: viewers.py). */
   shownElsewhere(id: StoredSessionId): Promise<boolean>
   /** Whether the view may move to another session now (not while a turn or a compaction runs). */
@@ -69,7 +72,7 @@ export class SessionLifecycle {
   constructor(host: LifecycleHost, steps: readonly Adoptable[]) {
     this.#host = host
     this.#steps = steps
-    this.#views = new SessionViews(host.gw)
+    this.#views = new SessionViews(host.gw, { closes: !host.launch.device })
   }
 
   /** Whether a session switch is in flight: prompts and the queue wait for the session it adopts. */
@@ -196,6 +199,14 @@ export class SessionLifecycle {
     const resume = host.launch.resume
 
     try {
+      if (!resume && host.launch.device) {
+        // A device tab whose topic has no open session: it shows the topic's once one opens (extras/device.ts).
+        host.transcript.notice(`${host.launch.device.name}: Telegram konusunda açık oturum yok; ilk mesajla açılınca buraya bağlanacak.`)
+        host.changed()
+
+        return
+      }
+
       if (!resume) {
         await this.newSession()
       } else if (host.launch.restored) {

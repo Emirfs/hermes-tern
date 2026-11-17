@@ -3832,6 +3832,10 @@ var text = _catch(string2(), "");
 var launchSpec = object({
   create: _catch(record(string2(), unknown()), {}),
   cwd: text,
+  device: _catch(
+    nullable(object({ chat_id: text, id: string2(), kind: text, name: string2(), session_key: text, thread_id: text })),
+    null
+  ),
   hermes: _catch(optional(hermesCommand), void 0),
   image: text,
   pane_cwd: text,
@@ -3849,6 +3853,14 @@ function readLaunchEnv(env = process.env, cwd = process.cwd()) {
   return Object.freeze({
     create: Object.freeze({ ...spec.create }),
     cwd: launchCwd,
+    device: spec.device ? Object.freeze({
+      chatId: spec.device.chat_id,
+      id: spec.device.id,
+      kind: spec.device.kind,
+      name: spec.device.name,
+      sessionKey: spec.device.session_key,
+      threadId: spec.device.thread_id
+    }) : void 0,
     eventLog: env["HERMES_TERN_EVENT_LOG"] ?? "",
     hermes: spec.hermes,
     home: env["HOME"],
@@ -12588,9 +12600,68 @@ ${DASHBOARD_USAGE}`, "warning");
   }
 ];
 
+// src/extras/device.tsx
+import { execFile as execFile4 } from "node:child_process";
+
+// src/core/disposables.ts
+var Disposables = class {
+  #teardowns = /* @__PURE__ */ new Set();
+  #disposed = false;
+  /** Whether dispose() ran. */
+  get disposed() {
+    return this.#disposed;
+  }
+  /**
+   * Runs `teardown` at dispose (at once when that already ran). The returned function drops it
+   * unrun: the thing ended on its own.
+   */
+  add(teardown) {
+    if (this.#disposed) {
+      teardown();
+      return () => void 0;
+    }
+    const entry = () => teardown();
+    this.#teardowns.add(entry);
+    return () => void this.#teardowns.delete(entry);
+  }
+  /** setTimeout, cleared at dispose unless it fired first. */
+  timeout(fn, ms2) {
+    const timer = setTimeout(() => {
+      drop();
+      fn();
+    }, ms2);
+    const drop = this.add(() => clearTimeout(timer));
+    return timer;
+  }
+  /**
+   * Runs every teardown once, the newest first. One that throws does not stop the rest; the first
+   * error is thrown after all of them ran.
+   */
+  dispose() {
+    if (this.#disposed) {
+      return;
+    }
+    this.#disposed = true;
+    const teardowns = [...this.#teardowns].reverse();
+    this.#teardowns.clear();
+    const errors = [];
+    for (const teardown of teardowns) {
+      try {
+        teardown();
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    if (errors.length) {
+      throw errors[0];
+    }
+  }
+};
+
 // src/messaging/field.ts
 var DEVICES_METHOD = "plugin.hermes-tern.field.devices";
 var STATUS_METHOD2 = "plugin.hermes-tern.field.status";
+var SESSION_METHOD = "plugin.hermes-tern.field.session";
 var FIELD_SKILL = "field-device-chat";
 var str3 = loose(nullable(string2()));
 var num5 = loose(nullable(number2()));
@@ -12661,6 +12732,32 @@ async function fieldStatus(gw2, device2) {
   }
   return r;
 }
+var sessionResult = object({
+  ended_reason: str3,
+  last_seen: num5,
+  online: loose(nullable(boolean2())),
+  rotated: _catch(boolean2(), false),
+  session_id: str3,
+  session_key: str3
+});
+function readDeviceSession(raw) {
+  const r = sessionResult.safeParse(raw);
+  return r.success ? {
+    endedReason: r.data.ended_reason ?? null,
+    lastSeen: r.data.last_seen ? Math.round(r.data.last_seen * 1e3) : null,
+    online: r.data.online ?? null,
+    rotated: r.data.rotated,
+    sessionId: r.data.session_id ?? null,
+    sessionKey: r.data.session_key ?? null
+  } : void 0;
+}
+async function fieldSession(gw2, device2, current) {
+  const r = readDeviceSession(await gw2.request(SESSION_METHOD, { device: device2, ...current ? { current } : {} }));
+  if (!r) {
+    throw new Error("field.session answered in an unknown shape (is the hermes-tern plugin in the gateway current?)");
+  }
+  return r;
+}
 function presence(d) {
   return d.online === true ? "online" : d.online === false ? "offline" : "not heard";
 }
@@ -12718,11 +12815,166 @@ function primePrompt(d) {
   ].join("");
 }
 
+// src/extras/device.tsx
+var SESSION_POLL_MS = 5e3;
+var STATUS_POLL_MS = 12e4;
+var FIRST_POLL_MS = 1500;
+function agoText(at, now) {
+  const s = Math.max(0, Math.round((now - at) / 1e3));
+  return s < 45 ? "az \xF6nce" : s < 3600 ? `${Math.max(1, Math.round(s / 60))} dk \xF6nce` : s < 86400 ? `${Math.round(s / 3600)} sa \xF6nce` : `${Math.round(s / 86400)} g\xFCn \xF6nce`;
+}
+function presenceOf(live, heard) {
+  if (live && typeof live !== "string") {
+    return answered2(live) ? "\xE7evrimi\xE7i" : "\xE7evrimd\u0131\u015F\u0131";
+  }
+  return heard?.online === true ? "\xE7evrimi\xE7i" : heard?.online === false ? "\xE7evrimd\u0131\u015F\u0131" : "bilinmiyor";
+}
+var DeviceLive = class {
+  #host;
+  #timers = new Disposables();
+  /** The topic session this tab opened last (the launcher's, then each one it followed to). */
+  #current;
+  #session;
+  #sessionError = "";
+  /** The last status query's answer, or why it failed; undefined before the first. */
+  #status;
+  #statusAt = 0;
+  #reading = false;
+  #querying = false;
+  constructor(host, initial) {
+    this.#host = host;
+    this.#current = initial || null;
+    this.#timers.timeout(() => this.#loop(), FIRST_POLL_MS);
+    this.#timers.timeout(() => this.#statusLoop(), FIRST_POLL_MS);
+  }
+  /** The topic session this tab follows (null while the topic has none). */
+  get current() {
+    return this.#current;
+  }
+  dispose() {
+    this.#timers.dispose();
+  }
+  #loop() {
+    void this.poll().finally(() => {
+      if (!this.#timers.disposed) {
+        this.#timers.timeout(() => this.#loop(), SESSION_POLL_MS);
+      }
+    });
+  }
+  #statusLoop() {
+    void this.queryStatus().finally(() => {
+      if (!this.#timers.disposed) {
+        this.#timers.timeout(() => this.#statusLoop(), STATUS_POLL_MS);
+      }
+    });
+  }
+  /** One read of the topic's open session: attaches to a new one, or follows a rotation. */
+  async poll() {
+    if (this.#reading) {
+      return;
+    }
+    this.#reading = true;
+    try {
+      const s = await fieldSession(this.#host.gw, this.#host.device.id, this.#current);
+      this.#session = s;
+      this.#sessionError = "";
+      if (s.sessionId && s.sessionId !== this.#current && (s.rotated || !this.#current)) {
+        await this.#follow(s.sessionId, s.endedReason);
+      }
+    } catch (e) {
+      this.#sessionError = errorText(e);
+    } finally {
+      this.#reading = false;
+      this.#host.changed();
+    }
+  }
+  /** Moves the view to the topic's session `next` (a later poll tries again while a turn holds the view). */
+  async #follow(next, ended) {
+    const host = this.#host;
+    const before = this.#current;
+    if (host.shown() !== next) {
+      if (host.canSwitch().kind !== "switch") {
+        return;
+      }
+      await host.resume(storedSessionId(next));
+      if (host.shown() !== next) {
+        return;
+      }
+    }
+    this.#current = next;
+    host.notice(
+      before ? `Telegram konusu yeni oturuma ge\xE7ti${ended ? ` (${ended})` : ""}: ${before} \u2192 ${next}. Bu sekme art\u0131k yeni oturumu g\xF6steriyor.` : `Telegram konusunda oturum a\xE7\u0131ld\u0131 (${next}); canl\u0131 izleniyor.`
+    );
+  }
+  /** One read-only status query of the box. */
+  async queryStatus() {
+    if (this.#querying) {
+      return;
+    }
+    this.#querying = true;
+    try {
+      this.#status = await fieldStatus(this.#host.gw, this.#host.device.id);
+    } catch (e) {
+      this.#status = errorText(e);
+    } finally {
+      this.#statusAt = Date.now();
+      this.#querying = false;
+      this.#host.changed();
+    }
+  }
+  /** The status line above the composer. */
+  node(now = Date.now()) {
+    const d = this.#host.device;
+    const live = this.#status;
+    const state = presenceOf(live, this.#session);
+    const seenAt = live && typeof live !== "string" && answered2(live) ? this.#statusAt : this.#session?.lastSeen;
+    const detail = live === void 0 ? "durum okunuyor\u2026" : typeof live === "string" ? `durum okunamad\u0131: ${live}` : statusLines(live)[0];
+    const topic = this.#sessionError ? `oturum okunamad\u0131: ${this.#sessionError}` : this.#session && !this.#session.sessionId ? "Telegram oturumu bekleniyor" : `Telegram #${d.threadId || "?"} \xB7 canl\u0131`;
+    return /* @__PURE__ */ jsxs("status", { role: "hermes.statusline", children: [
+      /* @__PURE__ */ jsx("seg", { priority: 9, role: "hermes.statusline.brand", spans: [{ t: `\u{1F4DF} ${d.name}` }], title: `${d.name} \xB7 ${d.id}${d.kind ? ` \xB7 ${d.kind}` : ""}` }, "box"),
+      /* @__PURE__ */ jsx(
+        "seg",
+        {
+          priority: 8,
+          role: state === "\xE7evrimi\xE7i" ? "hermes.statusline.good" : state === "\xE7evrimd\u0131\u015F\u0131" ? "hermes.statusline.bad" : "hermes.statusline.warn",
+          spans: [{ t: state }]
+        },
+        "state"
+      ),
+      seenAt ? /* @__PURE__ */ jsx("seg", { priority: 6, spans: [{ t: `son g\xF6r\xFClme ${agoText(seenAt, now)}` }] }, "seen") : null,
+      detail ? /* @__PURE__ */ jsx("seg", { priority: 2, spans: [{ t: detail }], title: detail }, "detail") : null,
+      /* @__PURE__ */ jsx("seg", { priority: 7, side: "right", spans: [{ t: topic }], title: this.#session?.sessionKey ?? d.sessionKey }, "topic")
+    ] }, "device");
+  }
+};
+function openEspTabs(hermes, focus, env = process.env) {
+  const { promise, reject, resolve: resolve4 } = Promise.withResolvers();
+  if (!hermes) {
+    reject(new Error("the launcher named no command for Hermes"));
+    return promise;
+  }
+  const [file2, ...args] = hermes;
+  execFile4(file2, [...args, "tern", "--esp-tabs", ...focus ? [focus] : []], { encoding: "utf8", env, timeout: 6e4 }, (error, stdout, stderr) => {
+    if (error) {
+      reject(new Error((stderr || stdout || error.message).trim()));
+    } else {
+      resolve4(stdout.trim());
+    }
+  });
+  return promise;
+}
+
 // src/overlays/field.tsx
 async function chatWithDevice(host, d) {
   if (host.busy) throw new Error("Wait for the current turn to finish before starting a device chat.");
   await host.newSession(`${d.name} \xB7 ${d.id}`);
   host.control().submit(primePrompt(d));
+}
+async function liveDeviceTab(host, d, open = openEspTabs) {
+  if (!d.topic) throw new Error(`${d.name} has no Telegram topic; N starts a separate device chat instead.`);
+  await open(launchEnv().hermes, d.id);
+  host.transcript.notice(`${d.name}: canl\u0131 sohbet sekmesi ESP oturumunda a\xE7\u0131ld\u0131.`, "success");
+  host.changed();
 }
 function openField(host, focus) {
   let state;
@@ -12775,6 +13027,15 @@ function openField(host, focus) {
     host.close(overlay2);
     void reportError(host.transcript, () => chatWithDevice(host, d));
   };
+  const live = () => {
+    const d = current();
+    if (!d) return;
+    host.close(overlay2);
+    void liveDeviceTab(host, d).catch((e) => {
+      host.transcript.notice(`Canl\u0131 sohbet a\xE7\u0131lamad\u0131: ${errorText(e)}`, "error");
+      host.changed();
+    });
+  };
   const overlay2 = {
     key: "field",
     modal: true,
@@ -12784,7 +13045,8 @@ function openField(host, focus) {
     },
     onKey: (k) => {
       if (k.name === "escape") host.close(overlay2);
-      else if (k.name === "enter") chat2();
+      else if (k.name === "enter") live();
+      else if (k.name === "n" && !k.ctrl && !k.meta && !k.alt && !k.shift) chat2();
       else if (k.name === "r" && !k.ctrl && !k.meta && !k.alt) {
         if (k.shift) void read();
         else loadStatus(current(), true);
@@ -12823,15 +13085,15 @@ function openField(host, focus) {
           ...optional2("selected", selected),
           total: list4.length,
           subtitle: [{ s: "muted", t: state ? `Field AI platform: ${state.platformState ?? "unknown"} \xB7 ${state.transport} \xB7 read-only status` : "Read-only status" }],
-          actions: [{ id: "chat", label: "New device chat", keys: ["enter"], primary: true }, { id: "status", label: "Read status", keys: ["r"] }, { id: "refresh", label: "Refresh list", keys: ["shift+r"] }, { id: "close", label: "Close", keys: ["esc"], end: true }],
-          onAction: { chat: chat2, close: () => host.close(overlay2), refresh: () => void read(), status: () => loadStatus(d, true) },
+          actions: [{ id: "live", label: "Canl\u0131 sohbet", keys: ["enter"], primary: true }, { id: "chat", label: "New device chat", keys: ["n"] }, { id: "status", label: "Read status", keys: ["r"] }, { id: "refresh", label: "Refresh list", keys: ["shift+r"] }, { id: "close", label: "Close", keys: ["esc"], end: true }],
+          onAction: { chat: chat2, close: () => host.close(overlay2), live, refresh: () => void read(), status: () => loadStatus(d, true) },
           onSelect: (ev) => {
             selected = ev.item;
             host.changed();
           },
           onActivate: (ev) => {
             selected = ev.item;
-            chat2();
+            live();
           },
           children: d ? /* @__PURE__ */ jsxs("col", { gap: "md", children: [
             /* @__PURE__ */ jsx("text", { text: `${d.name} \xB7 ${d.id}`, wrap: "word" }, "device"),
@@ -12845,7 +13107,7 @@ function openField(host, focus) {
 ${JSON.stringify(s.reads, null, 2)}
 \`\`\`` }, "raw")
             ] }, "status") : null,
-            /* @__PURE__ */ jsx("text", { text: "This sheet only reads status. Enter opens a separate, device-bound chat with field-device-chat.", wrap: "word" }, "safety")
+            /* @__PURE__ */ jsx("text", { text: "This sheet only reads status. Enter opens the box's live Telegram-topic tab in Tern's ESP session; N starts a separate chat with field-device-chat.", wrap: "word" }, "safety")
           ] }, "detail") : null
         },
         "field"
@@ -12859,19 +13121,36 @@ ${JSON.stringify(s.reads, null, 2)}
 }
 
 // src/extras/field.ts
-var FIELD_COMMANDS = [{
-  name: "field",
-  aliases: ["devices"],
-  help: "[device-id] \u2014 field boxes, read-only status, and a new device-bound chat",
-  run: (host, arg) => {
-    const id2 = arg.trim();
-    if (id2 && !/^[A-Za-z0-9_.-]{1,64}$/.test(id2)) {
-      host.transcript.notice("Usage: /field [device-id] (or /devices). /saha remains the field lab panel.", "warning");
-      return;
+var DEVICE_ID = /^[A-Za-z0-9_.-]{1,64}$/;
+var FIELD_COMMANDS = [
+  {
+    aliases: ["devices"],
+    help: "[device-id] \u2014 field boxes, read-only status, and each box\u2019s live Telegram chat",
+    name: "field",
+    run: (host, arg) => {
+      const id2 = arg.trim();
+      if (id2 && !DEVICE_ID.test(id2)) {
+        host.transcript.notice("Usage: /field [device-id] (or /devices). /saha remains the field lab panel.", "warning");
+        return;
+      }
+      openField(host, id2 || void 0);
     }
-    openField(host, id2 || void 0);
+  },
+  {
+    help: "[device] \u2014 the ESP session in Tern: a live Telegram chat tab per field box (opens what is missing)",
+    name: "esp",
+    run: async (host, arg) => {
+      const focus = arg.trim();
+      try {
+        const out = await openEspTabs(launchEnv().hermes, focus || void 0);
+        host.transcript.notice(out ? `ESP oturumu haz\u0131r:
+${out}` : "ESP oturumu haz\u0131r.", "success");
+      } catch (e) {
+        host.transcript.notice(`ESP sekmeleri a\xE7\u0131lamad\u0131: ${errorText(e)}`, "error");
+      }
+    }
   }
-}];
+];
 
 // src/extras/journey.ts
 var text6 = _catch(string2(), "");
@@ -13178,9 +13457,9 @@ async function handOff(gw2, sid, platform, onState = () => void 0, clock3 = real
 }
 
 // src/hermes/sessionList.ts
-import { execFile as execFile4 } from "node:child_process";
+import { execFile as execFile5 } from "node:child_process";
 import { promisify as promisify2 } from "node:util";
-var run3 = promisify2(execFile4);
+var run3 = promisify2(execFile5);
 var LIMIT = 200;
 var listRow = object({
   session_id: string2(),
@@ -17818,9 +18097,9 @@ function oneLine2(text9) {
 }
 
 // src/git/status.ts
-import { execFile as execFile5 } from "node:child_process";
+import { execFile as execFile6 } from "node:child_process";
 import { promisify as promisify3 } from "node:util";
-var run4 = promisify3(execFile5);
+var run4 = promisify3(execFile6);
 async function git(cwd, ...args) {
   const { stdout } = await run4("git", ["-C", cwd, ...args], { maxBuffer: 16 * 1024 * 1024, timeout: 1e4 });
   return stdout;
@@ -22670,12 +22949,12 @@ function maskedOf(req, method, p) {
 }
 
 // src/prs/open.ts
-import { execFile as execFile6 } from "node:child_process";
+import { execFile as execFile7 } from "node:child_process";
 import { promisify as promisify4 } from "node:util";
-var run5 = promisify4(execFile6);
+var run5 = promisify4(execFile7);
 var INSTALL = "tern plugin install github.com/alt-glitch/tern-plugins/prs";
 function openUrl(url) {
-  execFile6(process.platform === "darwin" ? "open" : "xdg-open", [url], () => {
+  execFile7(process.platform === "darwin" ? "open" : "xdg-open", [url], () => {
   });
 }
 async function prsPluginReady() {
@@ -24819,7 +25098,7 @@ function drawFrame(cx, now = Date.now()) {
     cx.completion.update(cx.composer);
   }
   cx.surface.render({
-    dock: [...cx.pet?.view ? [petNode(cx.pet.view)] : [], ...dockNodes(dockModel(cx, now), cx.actions)],
+    dock: [...cx.pet?.view ? [petNode(cx.pet.view)] : [], ...cx.device ? [cx.device.node(now)] : [], ...dockNodes(dockModel(cx, now), cx.actions)],
     layer: [
       ...cx.aside() ? [cx.sidebar.node("layer.sidebar")].filter((n) => n !== null) : [],
       ...cx.overlays.map((o) => o.node(`layer.${o.key}`)),
@@ -25832,73 +26111,18 @@ var ConnectWatcher = class {
   }
 };
 
-// src/core/disposables.ts
-var Disposables = class {
-  #teardowns = /* @__PURE__ */ new Set();
-  #disposed = false;
-  /** Whether dispose() ran. */
-  get disposed() {
-    return this.#disposed;
-  }
-  /**
-   * Runs `teardown` at dispose (at once when that already ran). The returned function drops it
-   * unrun: the thing ended on its own.
-   */
-  add(teardown) {
-    if (this.#disposed) {
-      teardown();
-      return () => void 0;
-    }
-    const entry = () => teardown();
-    this.#teardowns.add(entry);
-    return () => void this.#teardowns.delete(entry);
-  }
-  /** setTimeout, cleared at dispose unless it fired first. */
-  timeout(fn, ms2) {
-    const timer = setTimeout(() => {
-      drop();
-      fn();
-    }, ms2);
-    const drop = this.add(() => clearTimeout(timer));
-    return timer;
-  }
-  /**
-   * Runs every teardown once, the newest first. One that throws does not stop the rest; the first
-   * error is thrown after all of them ran.
-   */
-  dispose() {
-    if (this.#disposed) {
-      return;
-    }
-    this.#disposed = true;
-    const teardowns = [...this.#teardowns].reverse();
-    this.#teardowns.clear();
-    const errors = [];
-    for (const teardown of teardowns) {
-      try {
-        teardown();
-      } catch (error) {
-        errors.push(error);
-      }
-    }
-    if (errors.length) {
-      throw errors[0];
-    }
-  }
-};
-
 // src/draft/attachments.ts
 import { existsSync as existsSync3 } from "node:fs";
 import { basename as basename4 } from "node:path";
 
 // src/hermes/clipboardImage.ts
-import { execFile as execFile7 } from "node:child_process";
+import { execFile as execFile8 } from "node:child_process";
 import { existsSync as existsSync2 } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { homedir as homedir9, tmpdir } from "node:os";
 import { join as join8, resolve as resolve3 } from "node:path";
 var runFile2 = (file2, args, options) => new Promise((done, fail) => {
-  execFile7(file2, args, { ...options, encoding: "utf8" }, (error, stdout, stderr) => {
+  execFile8(file2, args, { ...options, encoding: "utf8" }, (error, stdout, stderr) => {
     if (error && !Number.isInteger(error.code)) {
       return fail(error);
     }
@@ -27188,8 +27412,15 @@ var SessionViews = class {
    * shared gateway, the one that detaches, answers with one id for both.
    */
   #detaching = /* @__PURE__ */ new Map();
-  constructor(gw2) {
+  /**
+   * Whether leaving tells the owner this view closes the conversation (its end reason). A device tab's
+   * view only watches a messaging topic's session: its leaving must not close it (the owner would end its
+   * async delegations, gateway/session_viewer_close.py close_viewer_session), so it leaves without one.
+   */
+  #closes;
+  constructor(gw2, { closes = true } = {}) {
     this.#gw = gw2;
+    this.#closes = closes;
   }
   /** Takes the ids of an adopted snapshot `r`, keeping its subscription (the shared gateway's). */
   adopt(r) {
@@ -27218,7 +27449,7 @@ var SessionViews = class {
       return;
     }
     this.#subscriptions.delete(sid);
-    await this.#detach(sid, subscription2, endReason);
+    await this.#detach(sid, subscription2, this.#closes ? endReason : void 0);
   }
   /**
    * Releases what superseded switches attached, once the adopted session (`shown`) is known. The
@@ -27273,7 +27504,7 @@ var SessionLifecycle = class {
   constructor(host, steps) {
     this.#host = host;
     this.#steps = steps;
-    this.#views = new SessionViews(host.gw);
+    this.#views = new SessionViews(host.gw, { closes: !host.launch.device });
   }
   /** Whether a session switch is in flight: prompts and the queue wait for the session it adopts. */
   get switching() {
@@ -27372,6 +27603,11 @@ var SessionLifecycle = class {
     const host = this.#host;
     const resume = host.launch.resume;
     try {
+      if (!resume && host.launch.device) {
+        host.transcript.notice(`${host.launch.device.name}: Telegram konusunda a\xE7\u0131k oturum yok; ilk mesajla a\xE7\u0131l\u0131nca buraya ba\u011Flanacak.`);
+        host.changed();
+        return;
+      }
       if (!resume) {
         await this.newSession();
       } else if (host.launch.restored) {
@@ -29186,7 +29422,19 @@ function chatStores(chat2, { act, gw: gw2, launch: launch3, petFrame, settings: 
     gw: gw2,
     notice: (text9) => chat2.notice(text9, "warning")
   });
-  return { ...shared, attachments, completion: completion2, cron: cron2, life, pet, programStatus, router, stack, theme, viewer, warned, welcome };
+  const device2 = launch3.device ? new DeviceLive(
+    {
+      canSwitch: () => canSwitch(act().gates()),
+      changed,
+      device: launch3.device,
+      gw: gw2,
+      notice: (text9, tone) => chat2.notice(text9, tone),
+      resume: (id2) => life.resume(id2),
+      shown: () => session2.ref.stored
+    },
+    launch3.resume
+  ) : void 0;
+  return { ...shared, attachments, completion: completion2, cron: cron2, device: device2, life, pet, programStatus, router, stack, theme, viewer, warned, welcome };
 }
 function disposeStores(s) {
   s.timers.dispose();
@@ -29199,6 +29447,7 @@ function disposeStores(s) {
   s.sidebar.dispose();
   s.cron.dispose();
   s.pet.dispose();
+  s.device?.dispose();
 }
 
 // src/app/chat.ts
