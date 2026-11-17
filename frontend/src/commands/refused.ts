@@ -17,6 +17,7 @@ import type {
 import type { ChatPorts } from '../app/ports.js'
 import { oneOf, optional } from '../core/assert.js'
 import { errorText } from '../core/errors.js'
+import { cliPanel } from '../extras/cli.js'
 import type { NoticeEntry } from '../model.js'
 import { type BackgroundHost, openBackground } from '../overlays/background.js'
 import { openHermesSplit } from '../watch/spec.js'
@@ -34,21 +35,6 @@ export interface RefusedCommand {
 }
 
 const words = (arg: string) => arg.trim().split(/\s+/).filter(Boolean)
-
-/** `hermes <argv>` on the gateway host, headless; its output in a panel titled `title`. */
-async function cliPanel(host: RefusedHost, title: string, argv: string[]) {
-  const r = await rpc(host.gw, 'cli.exec', { argv })
-
-  if (r?.blocked) {
-    return host.transcript.notice(r.hint || `\`hermes ${argv.join(' ')}\` cannot run here.`, 'warning')
-  }
-
-  host.transcript.panel(title, r?.output?.trim() || '(no output)')
-
-  if (r?.code) {
-    host.transcript.notice(`\`hermes ${argv.join(' ')}\` exited with code ${r.code}.`, 'warning')
-  }
-}
 
 const isBrowserAction = oneOf(['connect', 'disconnect', 'status'])
 
@@ -318,12 +304,8 @@ const HIDDEN: readonly { name: string; aliases?: readonly string[]; why: (name: 
   { aliases: ['detail'], name: 'details', why: ink('Tern has no detail levels.') },
   { name: 'focus', why: ink('Tern has no focus view.') },
   { name: 'indicator', why: ink('Tern has its own busy indicator.') },
-  { aliases: ['learning', 'memory-graph'], name: 'journey', why: ink('Tern has no learning timeline.') },
-  { name: 'logs', why: ink('Tern has no gateway log viewer.') },
   { aliases: ['scroll'], name: 'mouse', why: ink('Tern handles the mouse itself.') },
   { name: 'palette', why: ink('in Tern, type / to search every command.') },
-  { name: 'pet', why: ink('Tern has no pet.') },
-  { aliases: ['generate-pet'], name: 'hatch', why: ink('Tern has no pet.') },
   { aliases: ['compose'], name: 'prompt', why: ink("Tern's composer already edits Markdown.") },
   { name: 'redraw', why: ink('Tern repaints by itself.') },
   { aliases: ['sb'], name: 'statusbar', why: ink('Tern has no status bar to toggle.') },

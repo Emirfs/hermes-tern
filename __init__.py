@@ -9,7 +9,8 @@ In a Tern pane whose last ``hermes tern`` died (a crash, a kill, Tern's daemon r
 with no session flag resumes the conversation that pane showed (``panes.py``); ``--new`` starts fresh.
 """
 
-from .backend.gateway import charts, figure_check, pull_requests, render_hints, tern_env, viewers
+from .backend.gateway import (
+    charts, field, figure_check, messaging, pull_requests, render_hints, snapshots, tern_env, viewers)
 from .backend.launch import launcher
 
 
@@ -29,3 +30,7 @@ def register(ctx) -> None:
     tern_env.register(ctx)
     render_hints.register(ctx)
     figure_check.register(ctx)
+    # This fork's additions: snapshots, the messaging gateway's platforms and inbox, field devices.
+    snapshots.register(ctx)
+    messaging.register(ctx)
+    field.register(ctx)

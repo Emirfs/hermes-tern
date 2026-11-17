@@ -6,6 +6,7 @@
 import type { ChatPorts } from '../app/ports.js'
 import { copyToClipboard } from '../clipboard.js'
 import { storedSessionId } from '../core/ids.js'
+import { EXTRA_COMMANDS } from '../extras/index.js'
 import type { Entry } from '../model.js'
 import { type AgentsSheetHost, openAgents } from '../overlays/agents.js'
 import { type BackgroundHost, openBackground } from '../overlays/background.js'
@@ -73,6 +74,8 @@ export interface LocalCommand {
 }
 
 const COMMANDS: readonly LocalCommand[] = [
+  // This fork's additions first: a name there wins over upstream's (extras/index.ts).
+  ...EXTRA_COMMANDS,
   {
     // `/q` is Hermes' /queue.
     aliases: ['exit'],
