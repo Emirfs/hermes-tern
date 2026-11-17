@@ -23,6 +23,7 @@ import { Media } from '../media.js'
 import type { BackgroundProcess, Subagent } from '../model.js'
 import { Completion } from '../overlays/completion.js'
 import { OverlayStack } from '../overlays/overlay.js'
+import { Pet } from '../pet/store.js'
 import { Cron } from '../processes/cron.js'
 import { Processes } from '../processes/store.js'
 import { withClipboardImage } from '../hermes/clipboardImage.js'
@@ -60,6 +61,7 @@ export interface StoresDeps {
   readonly version: string
   readonly launch: LaunchEnv
   readonly settings: SettingsSource
+  petFrame(blob: string): void
   /** The actions, made over these stores: read only when a store calls back. */
   act(): AppActions
   /** The surface run() opens. */
@@ -73,7 +75,7 @@ export interface StoresDeps {
 export type ChatStores = ReturnType<typeof chatStores>
 
 /** Makes every store of the chat pane over `chat`'s ports, in the order they depend on each other. */
-export function chatStores(chat: ChatPorts, { act, gw, launch, settings, surface, version }: StoresDeps) {
+export function chatStores(chat: ChatPorts, { act, gw, launch, petFrame, settings, surface, version }: StoresDeps) {
   const changed = () => chat.changed()
   const saved = settings.load()
   const jobCharts = saved.jobCharts !== false
@@ -162,7 +164,7 @@ export function chatStores(chat: ChatPorts, { act, gw, launch, settings, surface
   /** The backend warnings shown already (stray output, the last status warning), so each stays one line. */
   const warned: Warned = { protocol: false, status: undefined }
   /** The gateway's keyed notices (credits, a slow start); the newest rides the status strip. */
-  const notices = new NoticeStrip(chat)
+  const notices = new NoticeStrip(chat, gw)
   /** The draft's images, those still uploading, and the launcher's startup image. */
   const attachments = new Attachments(
     {
@@ -264,8 +266,15 @@ export function chatStores(chat: ChatPorts, { act, gw, launch, settings, surface
   const welcome: WelcomeContext = { version: version && version !== 'unknown' ? `v${version}` : '' }
   /** The run status Tern shows on the pane and notifies about (OSC 7501), read after every frame. */
   const programStatus = new ProgramStatus()
+  const pet = new Pet({
+    blob: (bytes, mime) => act().blob(bytes, mime),
+    changed,
+    frame: petFrame,
+    gw,
+    notice: text => chat.notice(text, 'warning')
+  })
 
-  return { ...shared, attachments, completion, cron, life, programStatus, router, stack, theme, viewer, warned, welcome }
+  return { ...shared, attachments, completion, cron, life, pet, programStatus, router, stack, theme, viewer, warned, welcome }
 }
 
 /** Stops what the stores run on their own: every timer, the polls and the sidebar's reads. */
@@ -279,4 +288,5 @@ export function disposeStores(s: ChatStores) {
   s.processes.dispose()
   s.sidebar.dispose()
   s.cron.dispose()
+  s.pet.dispose()
 }

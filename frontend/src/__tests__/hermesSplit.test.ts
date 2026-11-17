@@ -19,8 +19,8 @@ const env = {
 }
 
 describe('openHermesSplit', () => {
-  it('runs `hermes <args>` in a kept-open split below this pane', async () => {
-    expect(await openHermesSplit(['update'], '/repo', env)).toBe(true)
+  it('runs `hermes <args>` in a kept-open split below this pane (macOS and Linux: through `env`)', async () => {
+    expect(await openHermesSplit(['update'], '/repo', env, 'linux')).toBe(true)
     expect(must(vi.mocked(execFile).mock.lastCall).slice(0, 2)).toEqual([
       'tern',
       [

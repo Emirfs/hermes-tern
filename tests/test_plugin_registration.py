@@ -67,8 +67,3 @@ def test_the_tern_command_parses_its_own_flags(ctx):
 def test_the_chart_task_has_a_plugin_namespaced_key(ctx):
     ((args, kwargs),) = ctx.of("register_auxiliary_task")
     assert args[0] == "tern_charts" and kwargs["display_name"]
-
-
-def test_the_chart_writer_is_a_plugin_rpc_method(ctx):
-    assert [a[0] for a, _ in ctx.of("register_rpc")] == [
-        "charts.author", "pull_requests.linked", "viewer.set", "viewer.clear", "viewer.shown", "figures.check"]

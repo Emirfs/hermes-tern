@@ -38,6 +38,7 @@ export type CommandHost = Pick<
   | 'open'
   | 'openHelp'
   | 'openPrs'
+  | 'pet'
   | 'prs'
   | 'quit'
   | 'resume'

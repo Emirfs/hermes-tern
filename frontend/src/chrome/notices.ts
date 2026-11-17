@@ -3,6 +3,9 @@
 // turnController's keyed notice. Notices is the list; NoticeStrip owns it with the timer that
 // re-renders when a `ttl` one expires, so the strip drops it on time.
 
+import { PlatformWatch } from '../messaging/attention.js'
+import type { Requester } from '../wire/rpc.js'
+
 import type { NoticeEntry } from '../model.js'
 
 /** A `notification.show` payload. */
@@ -95,9 +98,11 @@ export class NoticeStrip {
   readonly #host: NoticeStripHost
   readonly #notices = new Notices()
   #timer: NodeJS.Timeout | undefined
+  readonly #platforms: PlatformWatch | undefined
 
-  constructor(host: NoticeStripHost) {
+  constructor(host: NoticeStripHost, gw?: Requester) {
     this.#host = host
+    this.#platforms = gw ? new PlatformWatch({ changed: () => host.changed(), gw }) : undefined
   }
 
   /** Adds or replaces the notice, and re-arms the expiry render. */
@@ -113,7 +118,10 @@ export class NoticeStrip {
 
   /** The notice the strip shows at `now`. */
   current(now = Date.now()): Notice | undefined {
-    return this.#notices.current(now)
+    const notice = this.#notices.current(now)
+    const text = this.#platforms?.text
+
+    return notice ?? (text ? { key: 'messaging:attention', text, tone: 'warning' } : undefined)
   }
 
   /** Forgets every notice (another session is shown). */
@@ -124,6 +132,7 @@ export class NoticeStrip {
   /** Stops the expiry render. */
   dispose() {
     clearTimeout(this.#timer)
+    this.#platforms?.dispose()
   }
 
   /** Re-renders when the next `ttl` notice expires, so the strip drops it on time. */

@@ -39,6 +39,8 @@ import { runInput } from '../surface/input.js'
 import type { Transcript } from '../transcript/store.js'
 import type { Busy } from '../turn/activity.js'
 import { IMAGE_ONLY_PROMPT } from '../turn/prompt.js'
+import { petActivity } from '../pet/state.js'
+import { PET_IMAGE_ID, PET_STYLES } from '../view/pet.js'
 import { STYLES } from '../view/styles.js'
 import { noticeSink, onCardFault } from '../view/tools/faults.js'
 import { busyLabel, preparingLabel } from '../view/workLogModel.js'
@@ -63,6 +65,7 @@ export class App implements ChatPorts {
   readonly automation: Automation
   readonly prs: LinkedPrs
   readonly overlays: Overlay[]
+  readonly pet: ChatStores['pet']
   /** Every store, the ports' among them: entry.ts and the tests reach the rest here, a module through its ports. */
   readonly stores: ChatStores
   readonly #renders = new RenderScheduler(() => this.#frame())
@@ -81,7 +84,15 @@ export class App implements ChatPorts {
     this.#tern = tern
     this.#gw = gw
     this.#launch = launch
-    const s = chatStores(this, { act: () => this.#act, gw, launch, settings, surface: () => this.#surface, version })
+    const s = chatStores(this, {
+      act: () => this.#act,
+      gw,
+      launch,
+      petFrame: blob => this.#tern.surface('hermes')?.send([['set', PET_IMAGE_ID, { blob }]]),
+      settings,
+      surface: () => this.#surface,
+      version
+    })
     this.stores = s
     this.session = s.session
     this.transcript = s.transcript
@@ -90,6 +101,7 @@ export class App implements ChatPorts {
     this.cron = s.cron
     this.sidebar = s.sidebar
     this.automation = s.automation
+    this.pet = s.pet
     this.prs = s.prs
     this.overlays = s.overlays
     this.#act = new AppActions({ ...s, chat: this, gw, launch, surface: () => this.#surface, tern })
@@ -112,7 +124,7 @@ export class App implements ChatPorts {
 
   async run(): Promise<number> {
     const s = this.stores
-    this.#surface = new SurfaceHost(this.#tern, 'hermes', STYLES)
+    this.#surface = new SurfaceHost(this.#tern, 'hermes', STYLES + PET_STYLES)
     this.#view = {
       ...s,
       actions: this.#act.dock,
@@ -126,6 +138,7 @@ export class App implements ChatPorts {
 
     if (this.#tern.caps.features.includes('blobs')) {
       s.welcome.logo = this.#tern.blob(logo, 'image/png')
+      void s.pet.refresh()
     }
 
     this.transcript.push({ id: entryId('welcome'), kind: 'welcome' })
@@ -158,7 +171,12 @@ export class App implements ChatPorts {
     void runInput(this.#tern, {
       after: () => this.changed(),
       onError: error => this.transcript.notice(`Input failed: ${errorText(error)}`, 'error'),
-      onEvent: event => onTernEvent(event, this.#act.events),
+      onEvent: event => {
+        if (event.ev === 'visible') s.pet.visible(event.visible)
+        if (event.ev === 'resize' && event.visible !== undefined) s.pet.visible(event.visible)
+        if (event.ev === 'motion') s.pet.reduceMotion(event.reduce)
+        onTernEvent(event, this.#act.events)
+      },
       onKey: key => onKey(key, this.#act.keys, this.overlays.at(-1))
     }).then(() => this.#end())
 
@@ -190,6 +208,10 @@ export class App implements ChatPorts {
   /** One frame of the whole view, once run() opened the surface, and the run status it shows. */
   #frame() {
     if (this.#view) {
+      const s = this.stores
+      const last = this.transcript.entries.findLast(e => e.kind === 'turn')
+      const todos = this.transcript.currentTodos()
+      s.pet.activity(petActivity(last, Boolean(this.busy), Boolean(s.sheets.waiting())), last, Boolean(todos?.length && todos.every(t => t.status === 'completed' || t.status === 'cancelled')))
       drawFrame(this.#view)
       this.#reportStatus()
     }

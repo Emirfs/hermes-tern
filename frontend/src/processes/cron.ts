@@ -1,13 +1,15 @@
 // Hermes' cron jobs, for the Background sheet's Cron tab: every job of the profile's cron store
 // (cron.manage `list`, paused ones too), not only this session's. A job a `cronjob_manage` call of this
 // session created is marked as its own. The list polls every five seconds while the tab shows;
-// pause, resume and remove go through the same method.
+// pause, resume and remove go through the same method. Run now and a new job run `hermes cron run|create`
+// through cli.exec (the CLI takes cron/jobs.py's cross-process `.jobs.lock`, as the gateway's ticker does).
 
 import type { CronJobRow } from '@hermes/shared/gateway-events'
 import type { GatewayClient } from '@hermes/shared/gateway-client'
 
 import { errorText } from '../core/errors.js'
 import { Poller } from '../core/poller.js'
+import { option, withPositionals } from '../kanban/model.js'
 import type { ToolCall } from '../model.js'
 import { record } from '../wire/json.js'
 import { rpc } from '../wire/rpc.js'
@@ -42,6 +44,32 @@ export function jobError(job: CronJob): string | undefined {
 export function jobTone(job: CronJob): 'accent' | 'error' | 'muted' {
   return isPaused(job) ? 'muted' : jobError(job) || job.last_status === 'error' ? 'error' : 'accent'
 }
+
+/** What a new job says: when it runs, what the agent does, and optionally its name and where it delivers. */
+export interface NewCronJob {
+  schedule: string
+  prompt: string
+  name?: string
+  deliver?: string
+}
+
+/** `hermes cron create [--name=…] [--deliver=…] <schedule> <prompt>`. */
+export function cronCreateArgv(job: NewCronJob): string[] {
+  const name = job.name?.trim()
+  const deliver = job.deliver?.trim()
+
+  return [
+    'cron',
+    'create',
+    ...withPositionals(
+      [...(name ? [option('name', name)] : []), ...(deliver ? [option('deliver', deliver)] : [])],
+      [job.schedule.trim(), job.prompt.trim()]
+    )
+  ]
+}
+
+/** `hermes cron run <id>`: runs the job now, to its end, in the `hermes` process (cron.py `_job_action`). */
+export const cronRunArgv = (id: string) => ['cron', 'run', ...withPositionals([], [id])]
 
 /** The ids of the jobs this session's `cronjob_manage` calls created (each create result names its job). */
 export function ownJobs(calls: readonly ToolCall[]): Set<string> {
@@ -112,16 +140,23 @@ export class Cron {
   }
 
   /** Pauses, resumes or removes job `id`; throws the gateway's error. */
-  async act(action: CronAction, id: string): Promise<void> {
-    this.#busy.add(id)
-    this.#host.changed()
-
-    try {
+  act(action: CronAction, id: string): Promise<void> {
+    return this.during(id, async () => {
       const r = await rpc(this.#host.gw, 'cron.manage', { action, name: id })
 
       if (r?.success === false || r?.error) {
         throw new Error(r.error || `Could not ${action} the job`)
       }
+    })
+  }
+
+  /** Runs `work` with job `id` marked busy, then reloads the list (also when it throws). */
+  async during<T>(id: string, work: () => Promise<T>): Promise<T> {
+    this.#busy.add(id)
+    this.#host.changed()
+
+    try {
+      return await work()
     } finally {
       this.#busy.delete(id)
       await this.refresh()

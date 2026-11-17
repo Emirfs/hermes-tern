@@ -4,19 +4,33 @@
 // output line; the preview shows the process's facts and its output, following the end. Enter
 // gives the output the whole sheet, K stops the selected process, Shift+K stops them all (both
 // ask first), C copies the command. The Cron tab lists every Hermes cron job and monitor: P
-// pauses or resumes the selected one, D removes it (asking first).
+// pauses or resumes the selected one, D removes it (asking first), R runs it now and N makes a new
+// one (`hermes cron run|create` through cli.exec).
 
 import type { JSX, Key, PickerColumn, PickerItem } from '@stencil-hq/tern'
 
 import type { ChatPorts } from '../app/ports.js'
 import { copyToClipboard } from '../clipboard.js'
 import { optional } from '../core/assert.js'
+import { errorText } from '../core/errors.js'
 import { Flash } from '../core/flash.js'
 import { plural } from '../core/text.js'
+import { hermesExec } from '../extras/cli.js'
 import type { BackgroundProcess, ToolCall } from '../model.js'
-import { type CronAction, type CronJob, isMonitor, isPaused, jobError, jobTone, ownJobs } from '../processes/cron.js'
+import {
+  type CronAction,
+  cronCreateArgv,
+  type CronJob,
+  cronRunArgv,
+  isMonitor,
+  isPaused,
+  jobError,
+  jobTone,
+  ownJobs
+} from '../processes/cron.js'
 import { PROCESS_LOOK } from '../processes/look.js'
 import {
+  currentJob,
   initialSheet,
   reduceSheet,
   SHEET_CLICKS,
@@ -45,11 +59,13 @@ import { clockSeconds, duration, relative } from '../view/format.js'
 import { shortPath } from '../view/tools/steps.js'
 import { type Fact, facts } from '../view/ui/facts.js'
 
+import { formOverlay } from './form.js'
+import { runOutcome } from './kanban.js'
 import type { Overlay } from './overlay.js'
 import { countSummary, reportError, tickWhileOpen } from './sheet.js'
 
 /** What the Background sheet reaches of the app. */
-export type BackgroundHost = Pick<ChatPorts, 'changed' | 'close' | 'cron' | 'open' | 'processes' | 'transcript'>
+export type BackgroundHost = Pick<ChatPorts, 'changed' | 'close' | 'cron' | 'gw' | 'open' | 'processes' | 'transcript'>
 
 const KEY = 'background'
 /** Run times follow the clock while the sheet is open. */
@@ -101,6 +117,58 @@ export function openBackground(host: BackgroundHost, at?: string | { tab: 'cron'
     host.changed()
   }
 
+  /** R: `hermes cron run <id>`, which runs the job to its end (cli.exec's longest wait). */
+  const runJob = async (j: CronJob) => {
+    const argv = cronRunArgv(j.job_id)
+    host.transcript.notice(`Running cron job ${j.name || j.job_id} now…`)
+
+    await reportError(host.transcript, () =>
+      host.cron.during(j.job_id, async () => {
+        const r = await hermesExec(host, argv, 600)
+        const out = runOutcome(r, argv)
+
+        if (r.output && !r.blocked) {
+          host.transcript.panel(`hermes ${argv.join(' ')}`, r.output)
+        }
+
+        if (!out.ok) {
+          throw new Error(out.text)
+        }
+      })
+    )
+
+    host.changed()
+  }
+
+  /** N: a form for `hermes cron create`. */
+  const newJob = () =>
+    host.open(
+      formOverlay(host, {
+        detail: "Schedule: 30m, every 2h or a cron line (0 9 * * *). Deliver: origin, local, telegram, whatsapp, platform:chat_id… (empty: Hermes' default).",
+        fields: [
+          { id: 'schedule', label: 'Schedule', required: true },
+          { id: 'prompt', label: 'Prompt', required: true },
+          { id: 'name', label: 'Name' },
+          { id: 'deliver', label: 'Deliver to' }
+        ],
+        key: 'cron-new',
+        onSubmit: v => void createJob(cronCreateArgv({ deliver: v['deliver'] ?? '', name: v['name'] ?? '', prompt: v['prompt'] ?? '', schedule: v['schedule'] ?? '' })),
+        submit: 'Create',
+        title: 'New cron job'
+      })
+    )
+
+  const createJob = async (argv: string[]) => {
+    try {
+      const out = runOutcome(await hermesExec(host, argv), argv)
+      host.transcript.notice(out.ok ? `Cron: ${out.text}` : out.text, out.ok ? 'info' : 'error')
+    } catch (e) {
+      host.transcript.notice(`hermes ${argv.join(' ')}: ${errorText(e)}`, 'error')
+    }
+
+    await host.cron.refresh()
+  }
+
   const copy = (command: string, id: string) => {
     copyToClipboard(command)
     copied.set(id)
@@ -144,9 +212,22 @@ export function openBackground(host: BackgroundHost, at?: string | { tab: 'cron'
     host.changed()
   }
 
-  const handlers = Object.fromEntries(
-    Object.entries(SHEET_CLICKS).map(([id, action]) => [id, (ev: { value?: string }) => click(action(ev))])
-  )
+  /** The Cron tab's own: Run now on the picked job, New job. */
+  const cronActions = {
+    new: () => newJob(),
+    run: () => {
+      const j = currentJob(state, sheetFacts())
+
+      if (j && !host.cron.busy(j.job_id)) {
+        void runJob(j)
+      }
+    }
+  }
+
+  const handlers = {
+    ...Object.fromEntries(Object.entries(SHEET_CLICKS).map(([id, action]) => [id, (ev: { value?: string }) => click(action(ev))])),
+    ...cronActions
+  }
 
   const overlay: Overlay = {
     key: KEY,
@@ -161,7 +242,13 @@ export function openBackground(host: BackgroundHost, at?: string | { tab: 'cron'
     },
     node: () => sheetNode(Date.now()),
     onKey: (k: Key) => {
-      act(sheetKey(state, k, sheetFacts()))
+      const bare = !k.ctrl && !k.alt && !k.meta && !k.shift
+
+      if (state.tab === 'cron' && !state.confirm && bare && (k.name === 'r' || k.name === 'n')) {
+        cronActions[k.name === 'r' ? 'run' : 'new']()
+      } else {
+        act(sheetKey(state, k, sheetFacts()))
+      }
 
       return true
     }
@@ -202,6 +289,8 @@ export function openBackground(host: BackgroundHost, at?: string | { tab: 'cron'
             primary: true
           },
           { danger: true, ...optional('disabled', j ? (busy ? 'Working' : undefined) : 'No job'), id: 'remove', keys: ['d'], label: 'Remove' },
+          { ...optional('disabled', j ? (busy ? 'Working' : undefined) : 'No job'), id: 'run', keys: ['r'], label: 'Run now' },
+          { id: 'new', keys: ['n'], label: 'New job' },
           { end: true, id: 'close', keys: ['esc'], label: 'Close' }
         ]}
         columns={columns}

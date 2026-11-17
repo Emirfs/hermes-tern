@@ -1,13 +1,12 @@
 // Registry commands the shared gateway's `slash.exec` refuses (gateway/session_commands.py
-// `command_verdict`) that no sheet or session RPC elsewhere serves. Some run here: /cron opens the
-// Background sheet, /browser, /plugins and /subscription read their own RPCs (as Ink's ops.ts,
-// pluginsHub.tsx and subscription.ts do), /config and /worktree run `hermes …` through `cli.exec`,
-// /snapshot create runs `hermes backup --quick`, /update opens a split running `hermes update`.
-// The rest are Ink-TUI-only or messaging-only: hidden from completion and /help, and typing one
-// anyway says why in a line instead of the gateway's generic refusal.
+// `command_verdict`) that no sheet or session RPC elsewhere serves. Some run here: /browser and
+// /subscription read their own RPCs (as Ink's ops.ts and subscription.ts do), /config and /worktree
+// run `hermes …` through `cli.exec`, /update opens a split running `hermes update` (/cron, /plugins
+// and /snapshot are this fork's, in extras/board.ts). The rest are Ink-TUI-only or messaging-only:
+// hidden from completion and /help, and typing one anyway says why in a line instead of the
+// gateway's generic refusal.
 
 import type {
-  AgentPluginRow,
   CurrentSubscription,
   SubscriptionStateResult,
   SubscriptionTierOption,
@@ -19,12 +18,11 @@ import { oneOf, optional } from '../core/assert.js'
 import { errorText } from '../core/errors.js'
 import { cliPanel } from '../extras/cli.js'
 import type { NoticeEntry } from '../model.js'
-import { type BackgroundHost, openBackground } from '../overlays/background.js'
 import { openHermesSplit } from '../watch/spec.js'
 import { type ResultOf, rpc } from '../wire/rpc.js'
 
 /** What these commands reach of the app. */
-export type RefusedHost = Pick<ChatPorts, 'gw' | 'session' | 'transcript'> & BackgroundHost
+export type RefusedHost = Pick<ChatPorts, 'gw' | 'session' | 'transcript'>
 
 /** A command this module answers: local.ts's LocalCommand, on the ports these commands reach. */
 export interface RefusedCommand {
@@ -77,56 +75,6 @@ async function browser(host: RefusedHost, arg: string) {
   }
 
   note(r?.connected ? `Browser connected: ${r.url || '(url unavailable)'}` : 'Browser not connected (set browser.cdp_url in config.yaml to attach one).')
-}
-
-/** What a plugin's line reads of its `plugins.manage` row. */
-type PluginRow = Pick<AgentPluginRow, 'name'> & Partial<Pick<AgentPluginRow, 'description' | 'source' | 'status' | 'version'>>
-
-/** One Markdown line per plugin: ✓ enabled, ✗ disabled, else its status in words. */
-export function pluginLines(rows: readonly PluginRow[]): string[] {
-  const mark = (status = '') => (status === 'enabled' ? '✓' : status === 'disabled' ? '✗' : '·')
-
-  return rows.map(p => {
-    const facts = [p.version, p.source, p.status === 'enabled' || p.status === 'disabled' ? '' : p.status]
-      .filter(Boolean)
-      .join(', ')
-
-    return `- ${mark(p.status)} **${p.name}**${facts ? ` (${facts})` : ''}${p.description ? ` — ${p.description}` : ''}`
-  })
-}
-
-/**
- * `/plugins [list|all]`: the Plugins Hub's own list (`plugins.manage list`), user plugins first as
- * the hub shows them. Ink sends the changing subcommands to `slash.exec`, which the shared gateway refuses.
- */
-async function plugins(host: RefusedHost, arg: string) {
-  const sub = (words(arg)[0] ?? 'list').toLowerCase()
-
-  if (sub !== 'list' && sub !== 'ls' && sub !== 'all') {
-    return host.transcript.notice(
-      `Usage: /plugins [list|all]. To ${sub} a plugin, run \`hermes plugins ${sub} …\` in a terminal.`,
-      'warning'
-    )
-  }
-
-  const r = await rpc(host.gw, 'plugins.manage', { action: 'list' })
-  const rows = r?.plugins ?? []
-  const user = rows.filter(p => p.source !== 'bundled')
-  // No user plugins: the bundled ones, so the list is never empty when some exist (as the hub falls back).
-  const shown = sub === 'all' || !user.length ? rows : user
-  const hidden = rows.length - shown.length
-
-  if (!rows.length) {
-    return host.transcript.notice('No plugins installed.')
-  }
-
-  host.transcript.panel(
-    'Plugins',
-    [
-      ...pluginLines(shown),
-      ...(hidden ? ['', `${hidden} bundled plugin${hidden === 1 ? '' : 's'} not shown: /plugins all lists them.`] : [])
-    ].join('\n')
-  )
 }
 
 /** What the `/subscription` panel reads of `subscription.state`: any field may be missing. */
@@ -239,25 +187,6 @@ function worktree(host: RefusedHost, arg: string) {
   return cliPanel(host, `/worktree ${[head, ...rest].join(' ')}`, ['worktree', head, ...rest, '--repo', cwd])
 }
 
-/**
- * `/snapshot create [label]`: `hermes backup --quick`, the same quick state snapshot. Listing,
- * restoring and pruning them have no `hermes` command, so only the classic CLI does those.
- */
-function snapshot(host: RefusedHost, arg: string) {
-  const [first = '', ...rest] = words(arg)
-
-  if (first.toLowerCase() !== 'create') {
-    return host.transcript.notice(
-      '/snapshot list, restore and prune run only in the classic CLI (hermes --cli). Here, /snapshot create [label] takes one.',
-      'warning'
-    )
-  }
-
-  const label = rest.join(' ')
-
-  return cliPanel(host, '/snapshot create', ['backup', '--quick', ...(label ? ['--label', label] : [])])
-}
-
 /** `/update`: `hermes update` in a split below the chat, as Ink hands the terminal to it on exit. */
 async function update(host: RefusedHost) {
   if (await openHermesSplit(['update'], host.session.info?.cwd || process.env['HOME'] || '/')) {
@@ -281,13 +210,10 @@ const guarded =
   }
 
 const ROUTED: readonly RefusedCommand[] = [
-  { name: 'cron', run: host => openBackground(host, { tab: 'cron' }) },
   { name: 'browser', run: browser },
-  { name: 'plugins', run: plugins },
   { aliases: ['upgrade'], name: 'subscription', run: subscription },
   { name: 'config', run: config },
   { name: 'worktree', run: worktree },
-  { aliases: ['snap'], name: 'snapshot', run: snapshot },
   { name: 'update', run: update }
 ]
 
@@ -318,7 +244,6 @@ const HIDDEN: readonly { name: string; aliases?: readonly string[]; why: (name: 
   { aliases: ['set-home'], name: 'sethome', why: messaging },
   { name: 'start', why: messaging },
   { name: 'topic', why: messaging },
-  { name: 'handoff', why: classic('It hands the session to a messaging platform.') },
   { name: 'export', why: classic('In a terminal, `hermes profile export` does the same.') },
   { name: 'import', why: classic('In a terminal, `hermes profile import <archive>` does the same.') }
 ]

@@ -17,6 +17,7 @@ import type { NoticeEntry } from '../model.js'
 import type { OverlayHost, Overlay } from '../overlays/overlay.js'
 import type { Cron } from '../processes/cron.js'
 import type { Processes } from '../processes/store.js'
+import type { Pet } from '../pet/store.js'
 import type { Automation } from '../session/automation.js'
 import type { ThemeMode } from '../settings.js'
 import type { Transcript } from '../transcript/store.js'
@@ -43,6 +44,7 @@ export interface ChatPorts extends OverlayHost {
   readonly agents: Agents
   readonly processes: Processes
   readonly cron: Cron
+  readonly pet: Pet
   readonly prs: LinkedPrs
   readonly automation: Automation
   /** The session sidebar's last read of git, which the Changes sheet starts from. */

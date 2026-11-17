@@ -18,6 +18,7 @@ export const IGNORED = [
   'display.status',
   'free_tier.challenge',
   'gateway.stderr',
+  'groups.changed',
   'message.reaction',
   'onboarding.ended',
   'pairing.changed',

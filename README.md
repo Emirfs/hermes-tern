@@ -1,5 +1,46 @@
 <h1 align="center">hermes-tern</h1>
 
+## Emirfs fork
+
+This fork extends the native chat without replacing Hermes' gateway, messaging adapters or device
+transports. Telegram, WhatsApp and field-device sessions remain owned by Hermes.
+
+### Messaging and field devices
+
+| Command | Purpose |
+| --- | --- |
+| `/platforms` | Gateway platform status and connection problems |
+| `/send [--to target] message` | Confirm and send a message through Hermes; targets include platform home channels and Telegram topics |
+| `/inbox` | Browse and resume messaging sessions |
+| `/pairing [list\|approve platform code\|revoke platform user]` | Inspect access requests; approve/revoke only after confirmation |
+| `/handoff platform` | Confirm and hand the current conversation to a messaging platform |
+| `/field [device-id]`, `/devices` | Field-device inventory and read-only status |
+
+The field panel discovers its transport from the configured `mcp_servers.field_ai` command; it does
+not flash firmware, enable RF transmission or move actuators. Device control stays in the agent's
+existing tools and approval flow. Connection status is not a device safety or emergency-stop signal.
+
+### Tasks and maintenance
+
+| Command | Purpose |
+| --- | --- |
+| `/kanban` | Native task picker grouped by status; Tab switches boards, N creates, M moves, C completes, B blocks, U unblocks, A assigns, X archives, R refreshes |
+| `/kanban <verb> …` | Hermes' kanban read/write commands, including board management |
+| `/cron` | Background sheet's Cron tab; N creates a job, R runs the selected job |
+| `/cron <verb> …` | Schedule, edit, pause, resume, run, cancel or remove jobs |
+| `/plugins [list\|all\|<verb> …]` | Inspect and manage Hermes plugins; installation, updates and removal ask first |
+| `/snapshot [list\|create [label]\|restore <id>\|prune [keep]]` | Manage quick state backups, not filesystem checkpoints |
+
+Snapshot restore is refused while a gateway owns the profile: replacing its database/config under a
+live gateway would affect messaging and device sessions. Use `hermes --cli`, then
+`/snapshot restore <id>` for Hermes' maintenance handoff; that operation temporarily interrupts
+messaging. Creating/listing backups does not stop the gateway.
+
+`/cron run <id>` runs the job synchronously through Hermes (up to the gateway's 600-second CLI
+request limit); it is not a fire-and-forget enqueue operation.
+
+
+
 <p align="center">
   <b><a href="https://github.com/NousResearch/hermes-agent">Hermes Agent</a>, drawn natively by <a href="https://stencil.so/tern">Tern</a>.</b><br>
   The transcript, tool cards, approvals, subagents and pull requests are real Tern UI, not text in a terminal.

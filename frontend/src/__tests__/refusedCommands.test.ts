@@ -97,17 +97,6 @@ describe('commands the shared gateway refuses, routed here', () => {
     expect(must(a.transcript.panel.mock.lastCall)[1]).toContain('- · **memory-honcho** (bundled, not enabled)')
   })
 
-  it('/plugins enable is a usage notice: Ink sends it to slash.exec, which the shared gateway refuses', async () => {
-    const a = app()
-
-    await run(a, 'plugins', 'enable foo')
-    expect(a.request).not.toHaveBeenCalled()
-    expect(a.transcript.notice).toHaveBeenCalledWith(
-      'Usage: /plugins [list|all]. To enable a plugin, run `hermes plugins enable …` in a terminal.',
-      'warning'
-    )
-  })
-
   it('/subscription (and /upgrade) shows the plan from subscription.state with a link to change it', async () => {
     const state = {
       can_change_plan: true,
@@ -227,20 +216,6 @@ describe('commands the shared gateway refuses, routed here', () => {
     expect([...a.request.mock.calls, ...early.request.mock.calls]).toEqual([])
   })
 
-  it('/snapshot create (and /snap create) runs `hermes backup --quick`; the other forms are classic-CLI only', async () => {
-    const a = app(() => ({ blocked: false, code: 0, output: 'Snapshot created: 20261018-1' }))
-
-    await run(a, 'snap', 'create before upgrade')
-    expect(a.request).toHaveBeenCalledWith('cli.exec', { argv: ['backup', '--quick', '--label', 'before upgrade'] })
-    expect(a.transcript.panel).toHaveBeenCalledWith('/snapshot create', 'Snapshot created: 20261018-1')
-
-    await run(a, 'snapshot', 'restore 1')
-    expect(a.request).toHaveBeenCalledTimes(1)
-    expect(must(a.transcript.notice.mock.lastCall)[0]).toMatch(
-      /^\/snapshot list, restore and prune run only in the classic CLI/
-    )
-  })
-
   it('/update opens a split running `hermes update`, else tells the user to run it', async () => {
     const a = app()
 
@@ -304,13 +279,13 @@ describe('hidden commands', () => {
   it('answers a typed Ink-only or messaging-only command, or its alias, in one line', async () => {
     const a = app()
 
-    await run(a, 'pet')
+    await run(a, 'mouse')
     await run(a, 'set-home')
     await run(a, 'sb')
     await run(a, 'export')
     expect(a.request).not.toHaveBeenCalled()
     expect(a.transcript.notice.mock.calls).toEqual([
-      ['/pet is an Ink TUI feature; Tern has no pet.', 'warning'],
+      ['/mouse is an Ink TUI feature; Tern handles the mouse itself.', 'warning'],
       ['/sethome is for messaging platforms (Telegram, Discord…).', 'warning'],
       ['/statusbar is an Ink TUI feature; Tern has no status bar to toggle.', 'warning'],
       [
@@ -321,11 +296,12 @@ describe('hidden commands', () => {
   })
 
   it('hides them, aliases too, and none of the routed ones', () => {
-    for (const name of ['pet', 'hatch', 'generate-pet', 'sethome', 'set-home', 'restart', 'compose', 'ts', 'mouse']) {
+    for (const name of ['battery', 'palette', 'wake', 'sethome', 'set-home', 'restart', 'compose', 'ts', 'mouse']) {
       expect(HIDDEN_COMMANDS.has(name)).toBe(true)
     }
 
-    for (const name of ['cron', 'browser', 'plugins', 'subscription', 'config', 'worktree', 'snapshot', 'update']) {
+    // The fork routes these itself (extras/): pets, journey, logs and handoff are no longer hidden.
+    for (const name of ['cron', 'browser', 'plugins', 'subscription', 'config', 'worktree', 'snapshot', 'update', 'pet', 'hatch', 'journey', 'logs', 'handoff']) {
       expect(HIDDEN_COMMANDS.has(name)).toBe(false)
     }
   })
@@ -333,17 +309,18 @@ describe('hidden commands', () => {
   const row = (text: string): CompletionItem => ({ display: text, kind: 'command', meta: '', text })
 
   it('drops them from completion', () => {
-    const items = slashItems([row('/pet'), row('/personality'), row('/pause'), row('/platform'), row('/plugins')], '/p')
+    const items = slashItems([row('/palette'), row('/personality'), row('/pause'), row('/platform'), row('/plugins')], '/pa')
 
-    expect(items.map(i => i.text)).toEqual(['/personality', '/plugins', '/ps', '/prs'])
+    expect(items.map(i => i.text)).toEqual(['/pairing', '/personality', '/plugins'])
   })
 
   it('never resolves a prefix to one', () => {
     const catalog = {
-      canon: { '/pet': '/pet', '/personality': '/personality', '/sethome': '/sethome', '/set-home': '/sethome' }
+      canon: { '/palette': '/palette', '/personality': '/personality', '/sethome': '/sethome', '/set-home': '/sethome' }
     }
 
-    expect(resolveSlashName('pe', catalog)).toEqual({ name: 'personality' })
+    expect(resolveSlashName('pal', catalog)).toBeNull()
+    expect(resolveSlashName('pers', catalog)).toEqual({ name: 'personality' })
     expect(resolveSlashName('seth', catalog)).toBeNull()
   })
 
@@ -355,7 +332,7 @@ describe('hidden commands', () => {
         pairs: [
           ['/sethome', 'Set this chat as the home channel'],
           ['/cron', 'Manage scheduled tasks'],
-          ['/pet', 'Toggle a pet']
+          ['/battery', 'Show the battery']
         ]
       }
     ]
@@ -371,6 +348,6 @@ describe('hidden commands', () => {
 
     expect(text).toContain('/cron')
     expect(text).not.toContain('/sethome')
-    expect(text).not.toContain('/pet')
+    expect(text).not.toContain('/battery')
   })
 })

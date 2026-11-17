@@ -1,6 +1,6 @@
 [project]
 name = "hermes-tern"
-version = "0.1.0"
+version = "0.2.0"
 description = "Hermes for Tern: the chat UI drawn natively by the Tern terminal over its Surface Protocol (community plugin)"
 readme = "README.md"
 license = { text = "MIT" }

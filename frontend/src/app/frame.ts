@@ -7,11 +7,13 @@ import type { Hud } from '../chrome/hud.js'
 import type { Sidebar } from '../chrome/sidebar.js'
 import type { Completion } from '../overlays/completion.js'
 import type { Overlay } from '../overlays/overlay.js'
+import type { Pet } from '../pet/store.js'
 import { COMPOSER_ID, INPUT_ID, type SurfaceHost } from '../surface/host.js'
 import type { Transcript } from '../transcript/store.js'
 import { type DockActions, dockNodes } from '../view/dock.js'
 import { type DockSources, dockModel, isModal, shownPills } from '../view/dockModel.js'
 import { entryNode, type TranscriptContext } from '../view/transcript.js'
+import { petNode } from '../view/pet.js'
 import type { WelcomeContext } from '../view/welcome.js'
 
 /** What a frame reads and the three things it changes: the pills' focus, the completion and the surface. */
@@ -22,6 +24,7 @@ export interface FrameCx extends DockSources {
   readonly overlays: readonly Pick<Overlay, 'focus' | 'key' | 'modal' | 'node'>[]
   readonly transcript: Pick<Transcript, 'currentTodos' | 'entries'>
   readonly sidebar: Pick<Sidebar, 'node'>
+  readonly pet?: Pick<Pet, 'view'>
   /** Tern has the aside feature: the session sidebar docks at the right edge. */
   aside(): boolean
   /** The dock's buttons, bound once. */
@@ -50,7 +53,7 @@ export function drawFrame(cx: FrameCx, now = Date.now()) {
   }
 
   cx.surface.render({
-    dock: dockNodes(dockModel(cx, now), cx.actions),
+    dock: [...(cx.pet?.view ? [petNode(cx.pet.view)] : []), ...dockNodes(dockModel(cx, now), cx.actions)],
     layer: [
       ...(cx.aside() ? [cx.sidebar.node('layer.sidebar')].filter(n => n !== null) : []),
       ...cx.overlays.map(o => o.node(`layer.${o.key}`)),

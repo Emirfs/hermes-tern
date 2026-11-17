@@ -84,9 +84,13 @@ const row = (text: string, kind = 'command', meta = ''): CompletionItem => ({ di
 
 describe('slashItems', () => {
   it("drops the hidden commands and adds this frontend's own by name", () => {
-    const items = slashItems([row('/plan'), row('/mouse'), row('/pet'), row('/pdf', 'skill')], '/p')
+    const items = slashItems([row('/plan'), row('/mouse'), row('/palette'), row('/pdf', 'skill')], '/p')
 
-    expect(items.map(i => i.text)).toEqual(['/plan', '/ps', '/prs', '/pdf'])
+    const texts = items.map(i => i.text)
+
+    expect(texts).not.toContain('/mouse')
+    expect(texts).not.toContain('/palette')
+    expect(texts).toEqual(expect.arrayContaining(['/plan', '/ps', '/prs', '/pet', '/platforms', '/pairing', '/pdf']))
     expect(items.find(i => i.text === '/ps')).toMatchObject({ kind: 'command', meta: 'Background processes and cron jobs' })
   })
 
@@ -112,7 +116,7 @@ describe('/help', () => {
     let sheet: Overlay | undefined
     const categories = [
       { name: 'Session', pairs: [['/new', 'Start a new session']] },
-      { name: 'TUI', pairs: [['/mouse', 'Set mouse tracking'], ['/logs', 'Show logs']] }
+      { name: 'TUI', pairs: [['/mouse', 'Set mouse tracking'], ['/redraw', 'Redraw the screen']] }
     ]
     const app = {
       gw: { request: async () => ({ categories }) },

@@ -7828,6 +7828,10 @@
  ],
  "requests": [
   {
+   "method": "pet.info.meta",
+   "params": {}
+  },
+  {
    "method": "runtime.describe",
    "params": {}
   },
