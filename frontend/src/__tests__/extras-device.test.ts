@@ -9,7 +9,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { LaunchDevice } from '../config/env.js'
 import { readLaunchEnv } from '../config/env.js'
-import { agoText, DeviceLive, type DeviceHost, presenceOf } from '../extras/device.js'
+import { agoText } from '../extras/ago.js'
+import { DeviceLive, type DeviceHost, presenceOf } from '../extras/device.js'
 import { readDeviceSession } from '../messaging/field.js'
 
 import { FakeGateway, fakeTern, must, topNodes } from './fakes.js'

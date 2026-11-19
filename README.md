@@ -31,6 +31,15 @@ existing tools and approval flow. Connection status is not a device safety or em
 
 A device tab only watches: leaving it never closes the topic's session.
 
+Beside the chat (Tern's aside) a device tab shows its box agent's panel, read every 10 s through
+`field.agent` from files only: **Görev** (`field-ai-box/missions/<id>.md`), **Senden beklenenler** (open
+`help_request`s of `private/agents/<id>/journal.jsonl`, highlighted while any is open), **Son kararlar**,
+**Protokol haritası** (the facts of the memory vault's `devices/<id>.md`, read through
+`hafiza/.tools/device_notes.py`; verified, candidate and rejected rows look different) and **Son işler**
+(reports and the waker's turns). The status line's `panel` segment hides or shows it (and says
+`❗ N bekleyen` while requests wait); `/sidebar` takes the edge while open. The panel never sends anything.
+The vault is `HAFIZA_DIR`, else the folder above the `hafiza_mcp.py` script config.yaml runs.
+
 ### Tasks and maintenance
 
 | Command | Purpose |
@@ -59,7 +68,10 @@ peers). The target is `<HERMES_HOME>/hermes-tern/kanban-notify.json`
 (`{"platform", "chat_id", "thread_id", "topic"}`); without it, or with `"dry_run": true`, messages go
 to `kanban-notify.log` beside it. The last handled event id per board is kept in
 `kanban-notify-state.json`, so a reload or restart neither replays nor repeats. Cards created with
-`--initial-status blocked` are announced as waiting for approval with their unblock command.
+`--initial-status blocked` are announced as waiting for approval with their unblock command. Each delivered
+message also opens as a reading tab in Tern's `Okuma` session: `tern-bridge read --key
+kanban-<task>-<event> --title '📋 <card title>' --from kanban -` with the text as Markdown, on its own
+thread under a 5 s timeout; a missing or failing `tern-bridge` costs one log line, never the Telegram message.
 
 `peer_list`, `peer_send(peer, text)` and `peer_ask(peer, text, timeout_s)` (toolset `hermes-tern`) let
 Hermes instances on different machines talk through a private GitHub repository (default

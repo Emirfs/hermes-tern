@@ -316,3 +316,123 @@ def test_the_session_rpc_follows_the_topic_and_adds_the_heartbeat(box, monkeypat
     for bad in ({"device": "fa-unknown"}, {"device": "../x"}, {"device": "fa-7ae9b284", "current": 3}):
         with pytest.raises(ValueError):
             field.session(bad)
+
+
+# ── The device agent's side panel (field.agent): mission, journal, vault note ──────────────────────
+
+MHI = "fa-7ae9b284"
+
+# The vault library's read_device as the hafiza slice publishes it.
+NOTES_MODULE = textwrap.dedent('''
+    def read_device(vault, device):
+        return {"summary": "", "decisions": [], "open": [], "facts": [
+            {"field": "b2.bit0", "meaning": "power", "status": "verified", "evidence": "capture:a", "updated": "2026-11-19"},
+            {"field": "family 0707 b4", "meaning": "mode?", "status": "candidate", "evidence": "", "updated": "2026-11-18"},
+            "not a fact"]}
+''')
+
+
+def journal(repo, rows, *, device=MHI):
+    """``rows`` as the journal's lines: dicts as JSON, strings verbatim."""
+    path = repo / "private" / "agents" / device / "journal.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(r if isinstance(r, str) else json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+    return path
+
+
+def entry(id, kind, ts, **extra):
+    return {"id": id, "ts": ts, "device": MHI, "kind": kind, "title": f"{kind} {id}", "body": "", "evidence": "", **extra}
+
+
+@pytest.fixture
+def vault(tmp_path, monkeypatch):
+    root = tmp_path / "hafiza"
+    (root / ".tools").mkdir(parents=True)
+    (root / "devices").mkdir()
+    monkeypatch.setenv("HAFIZA_DIR", str(root))
+    monkeypatch.setattr(field, "_notes_module", {})
+    return root
+
+
+def test_agent_lists_open_help_requests_decisions_and_work_newest_first(box, vault):
+    (box.repo / "missions").mkdir()
+    (box.repo / "missions" / f"{MHI}.md").write_text("# Görev\nMHI VRF protokolünü çöz.", encoding="utf-8")
+    (vault / ".tools" / "device_notes.py").write_text(NOTES_MODULE, encoding="utf-8")
+    (vault / "devices" / f"{MHI}.md").write_text("---\ntype: device\n---\n", encoding="utf-8")
+    journal(box.repo, [
+        entry("h1", "help_request", 1.0, status="open"),
+        entry("d1", "decision", 2.0),
+        "not json",
+        "[1, 2]",
+        entry("h2", "help_request", 3.0, status="open"),
+        entry("r1", "report", 4.0),
+        {"id": "x1", "ts": 5.0, "device": MHI, "kind": "help_done", "ref": "h1"},
+        entry("w1", "wake", 6.0, reason="kutu yeniden çevrimiçi", trigger="event"),
+        entry("p1", "protocol_finding", 7.0, field="b2.bit0", meaning="power", status="verified"),
+        entry("f1", "followup", 8.0, due_ts=99.0, reason="tekrar bak"),
+        entry("u1", "some_future_kind", 9.0),
+        {**entry("o1", "decision", 10.0), "device": "fa-61d44cb4"},
+        entry("d2", "decision", 11.0, extra_field={"ignored": True}),
+        entry("h3", "help_request", 12.0, status="open"),
+    ])
+    out = field.agent({"device": MHI})
+    assert out["device"] == MHI and out["mission"].startswith("# Görev") and out["errors"] == {}
+    assert [h["id"] for h in out["help_requests"]] == ["h3", "h2"]
+    assert [d["id"] for d in out["decisions"]] == ["d2", "d1"]
+    assert [r["id"] for r in out["reports"]] == ["w1", "r1"]
+    assert out["reports"][0]["reason"] == "kutu yeniden çevrimiçi" and out["reports"][0]["trigger"] == "event"
+    assert set(out["decisions"][0]) == {"id", "ts", "kind", "title", "body", "evidence"}
+    assert [f["field"] for f in out["facts"]] == ["b2.bit0", "family 0707 b4"]
+    assert out["facts"][1] == {"field": "family 0707 b4", "meaning": "mode?", "status": "candidate", "evidence": "",
+                               "updated": "2026-11-18"}
+
+
+def test_agent_keeps_the_newest_and_breaks_ties_by_line_order(box, vault):
+    rows = [entry(f"d{i}", "decision", float(i)) for i in range(25)]
+    rows += [entry("t1", "report", 50.0), entry("t2", "report", 50.0), entry("nots", "report", None)]
+    journal(box.repo, rows)
+    out = field.agent({"device": MHI})
+    assert [d["id"] for d in out["decisions"]] == [f"d{i}" for i in range(24, 4, -1)]
+    assert [r["id"] for r in out["reports"]] == ["t2", "t1", "nots"]
+    journal(box.repo, [entry(f"r{i}", "report", 100.0 + i) for i in range(35)])
+    reports = field.agent({"device": MHI})["reports"]
+    assert len(reports) == field.REPORTS_KEPT and (reports[0]["id"], reports[-1]["id"]) == ("r34", "r5")
+
+
+def test_agent_reads_missing_files_as_empty_without_writing(box, vault):
+    out = field.agent({"device": MHI})
+    assert out == {"device": MHI, "mission": "", "help_requests": [], "decisions": [], "reports": [], "facts": [],
+                   "errors": {}}
+    assert not (box.repo / "private" / "agents").exists() and not (box.repo / "missions").exists()
+    assert list((vault / "devices").iterdir()) == []
+
+
+def test_the_vault_library_is_not_asked_for_a_note_that_does_not_exist(box, vault):
+    (vault / ".tools" / "device_notes.py").write_text(NOTES_MODULE, encoding="utf-8")
+    assert field.agent({"device": MHI})["facts"] == []
+    assert field._notes_module == {}
+
+
+def test_a_broken_vault_library_leaves_the_map_empty_and_says_why(box, vault):
+    (vault / ".tools" / "device_notes.py").write_text("raise RuntimeError('half written')\n", encoding="utf-8")
+    (vault / "devices" / f"{MHI}.md").write_text("", encoding="utf-8")
+    journal(box.repo, [entry("d1", "decision", 1.0)])
+    out = field.agent({"device": MHI})
+    assert out["facts"] == [] and "half written" in out["errors"]["facts"]
+    assert [d["id"] for d in out["decisions"]] == ["d1"]
+
+
+def test_the_vault_is_the_folder_above_the_hafiza_server_config_runs(box, monkeypatch):
+    monkeypatch.delenv("HAFIZA_DIR", raising=False)
+    assert field.vault_dir(box.config) is None
+    config = {"mcp_servers": {**box.config["mcp_servers"], "hafiza": {"command": "python", "args": [
+        "-B", "C:/x/hafiza/.tools/hafiza_mcp.py"]}}}
+    assert field.vault_dir(config).as_posix() == "C:/x/hafiza"
+    monkeypatch.setenv("HAFIZA_DIR", "/elsewhere")
+    assert field.vault_dir(config).as_posix() == "/elsewhere"
+
+
+@pytest.mark.parametrize("device", [None, "", "..", "../x", "fa-unknown", 42])
+def test_agent_refuses_anything_but_a_provisioned_box(box, device):
+    with pytest.raises(ValueError):
+        field.agent({"device": device})

@@ -115,6 +115,40 @@ export const STYLES = css`
     margin-top: 0 !important;
   }
 
+  /* The device tab's agent panel (extras/devicePanel.tsx) is a prefs sheet holding its own view: no
+     search, page strip or empty state (its title and close stay); prose in sans, field names in mono. */
+  [data-role='hermes.device.aside'] :is(.pf-mark, .pf-search, .pf-groups, .pf-eyebrow, .pf-none) {
+    display: none !important;
+  }
+
+  [data-role='hermes.device.aside'] .pf-extra {
+    margin-top: 0 !important;
+  }
+
+  [data-role='hermes.device.panel'] :is(.sf-text, .sf-md, .md, .sf-card-head, .sf-section-head) {
+    font-family: var(--sans) !important;
+  }
+
+  [data-role='hermes.device.panel'] :is(.sf-t-mono, .sf-code) {
+    font-family: var(--mono) !important;
+  }
+
+  /* What the agent waits on stands out: an accent edge in the warning color. */
+  [data-role='hermes.device.help.open'] {
+    border-left: 3px solid var(--sf-c-warning, var(--accent)) !important;
+  }
+
+  [data-role='hermes.statusline.panel'] {
+    color: var(--t2) !important;
+    cursor: pointer;
+  }
+
+  [data-role='hermes.statusline.ask'] {
+    color: var(--sf-c-warning, var(--t1)) !important;
+    font-weight: 600 !important;
+    cursor: pointer;
+  }
+
   /* An open group's steps hang from its summary: a guide line down from its icon, the rows a size
      smaller, so the summary reads as the parent and not as one more step. */
   [data-role='hermes.work.group'] > .sf-section-body {
