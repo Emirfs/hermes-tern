@@ -166,6 +166,7 @@ function recordingHost() {
     readBusyMode: rec('readBusyMode'),
     restoreCompactions: rec('restoreCompactions'),
     reportCwd: rec('reportCwd'),
+    route: { adopted: rec('route.adopted') },
     sheets: { dropAll: rec('sheets.dropAll') },
     sidebar: { adopt: sid => void log.push(`sidebar.adopt ${sid}`) },
     showThoughts: sid => void log.push(`showThoughts ${sid}`),
@@ -213,6 +214,8 @@ describe('adoptSteps', () => {
       'markPane sb',
       'info',
       'usage',
+      // A snapshot that named no model has its route read after its info.
+      'route.adopted',
       'title.adopt Plans',
       'reportCwd',
       'activity.set',

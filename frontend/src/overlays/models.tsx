@@ -104,6 +104,8 @@ export function openModelPicker(host: ModelsHost) {
   let rows: Row[] = []
   let providers: { provider: ModelOptionProvider; name: string }[] = []
   let current = ''
+  /** The provider the session runs: its info's (a messaging chat's route, session/route.ts), else model.options'. */
+  let currentProvider = ''
   let query = ''
   let scope = ALL
   let selected: string | undefined
@@ -137,10 +139,14 @@ export function openModelPicker(host: ModelsHost) {
           providerName: name
         }))
       )
-      const currentProvider = list.find(p => p.is_current)?.slug ?? r.provider ?? ''
+      // session.info names the route the session runs; model.options answers config.yaml's default for a
+      // messaging chat, whose channel_overrides entry or /model pick it does not apply.
+      const info = host.session.info
+      const currentModel = info?.model || r.model
+      currentProvider = info?.provider || list.find(p => p.is_current)?.slug || r.provider || ''
       current =
-        rows.find(row => row.model === r.model && row.provider.slug === currentProvider)?.id ??
-        rows.find(row => row.model === r.model)?.id ??
+        rows.find(row => row.model === currentModel && row.provider.slug === currentProvider)?.id ??
+        rows.find(row => row.model === currentModel)?.id ??
         ''
       selected = current || rows[0]?.id
       state = 'ready'
@@ -196,7 +202,7 @@ export function openModelPicker(host: ModelsHost) {
 
     // The current provider's group leads, then the backend's order.
     const groups = [...providers].sort(
-      (a, b) => Number(Boolean(b.provider.is_current)) - Number(Boolean(a.provider.is_current))
+      (a, b) => Number(b.provider.slug === currentProvider) - Number(a.provider.slug === currentProvider)
     )
 
     for (const { provider, name } of groups) {

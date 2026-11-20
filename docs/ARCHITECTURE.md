@@ -58,7 +58,7 @@ flowchart LR
 | Seam | Producer | Consumer | Contract |
 | --- | --- | --- | --- |
 | `HERMES_TERN_LAUNCH` | `backend/launch/launcher.py` `LaunchSpec` | `frontend/src/config/env.ts` `readLaunchEnv` | One JSON object, snake_case keys. A missing field or one of the wrong type reads as its empty value. |
-| Plugin RPC `plugin.hermes-tern.*` | `backend/gateway/*` `ctx.register_rpc` | the frontend's gateway client | `viewer.set`, `viewer.clear`, `viewer.shown`, `pull_requests.linked`, `figures.check`, `charts.author`. |
+| Plugin RPC `plugin.hermes-tern.*` | `backend/gateway/*` `ctx.register_rpc` | the frontend's gateway client | `viewer.set`, `viewer.clear`, `viewer.shown`, `pull_requests.linked`, `figures.check`, `charts.author`; this fork's `session.route` (a messaging chat's model route), `field.*`, `messaging.*`, `snapshots.*`. |
 | Plugin events | `ctx.emit_to_session` | the frontend | `pull_requests.changed`, `figures.checked`, `charts.authored`. |
 | Pane files | the frontend | `backend/launch/panes.py` | `plugin-data/hermes-tern/panes/<TERN_PANE>.json`: the conversation a pane shows. |
 | PR list files | the frontend | Tern's `prs` plugin | `panes/<pane>.prs.json`, in the format of `prs/README.md` in alt-glitch/tern-plugins. |

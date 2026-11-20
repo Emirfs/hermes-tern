@@ -3349,6 +3349,12 @@
    }
   },
   {
+   "method": "plugin.hermes-tern.session.route",
+   "params": {
+    "session_id": "s1"
+   }
+  },
+  {
    "method": "process.list",
    "params": {
     "session_id": "s1"

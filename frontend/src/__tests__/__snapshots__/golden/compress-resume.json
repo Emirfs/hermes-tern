@@ -3930,6 +3930,12 @@
    }
   },
   {
+   "method": "plugin.hermes-tern.session.route",
+   "params": {
+    "session_id": "s1"
+   }
+  },
+  {
    "method": "process.list",
    "params": {
     "session_id": "s1"
@@ -3994,6 +4000,12 @@
    }
   },
   {
+   "method": "plugin.hermes-tern.session.route",
+   "params": {
+    "session_id": "s1"
+   }
+  },
+  {
    "method": "process.list",
    "params": {
     "session_id": "s1"
@@ -4047,6 +4059,12 @@
     "session_id": "old",
     "pid": "<PID>",
     "tern": {}
+   }
+  },
+  {
+   "method": "plugin.hermes-tern.session.route",
+   "params": {
+    "session_id": "old"
    }
   },
   {

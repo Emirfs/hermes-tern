@@ -41,6 +41,7 @@ import { Automation } from '../session/automation.js'
 import { SessionLifecycle } from '../session/lifecycle.js'
 import { markPane, writeSessionFile } from '../session/pane.js'
 import { ProgramStatus } from '../session/programStatus.js'
+import { SessionRoute } from '../session/route.js'
 import { SessionState } from '../session/state.js'
 import { showThoughts } from '../session/thoughts.js'
 import { SessionTitle } from '../session/title.js'
@@ -85,6 +86,13 @@ export function chatStores(chat: ChatPorts, { act, gw, launch, petFrame, setting
   /** Tells the plugin which session this pane shows (hermes/viewer.ts). */
   const viewer = new Viewer(gw)
   const transcript = new Transcript()
+  /** A messaging chat's model route, which its session.info never names (session/route.ts). */
+  const route = new SessionRoute({
+    gw,
+    messagingTab: launch.device !== undefined,
+    notice: (text, tone) => transcript.notice(text, tone),
+    state: session
+  })
   /** The working line's busy state and the compaction phase: their one owner. */
   const activity = new Activity()
   /** What the subagent, process and automation stores read of the app: the shown runtime id on each use. */
@@ -219,6 +227,7 @@ export function chatStores(chat: ChatPorts, { act, gw, launch, petFrame, setting
     prs,
     queue,
     reconnect,
+    route,
     session,
     sheets,
     sidebar,
