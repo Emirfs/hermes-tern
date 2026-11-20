@@ -72,11 +72,11 @@ describe('a device tab', () => {
 
     expect(gw.sent('session.resume')).toEqual([{ session_id: '20261105_141039_46405555' }])
     expect(gw.methods('session.create')).toEqual([])
-    app.control().submit('kompresör ne durumda?')
+    app.control().submit('how is the compressor doing?')
     await vi.waitFor(() => expect(gw.methods('prompt.submit')).toHaveLength(1))
     // The shown session is the Telegram topic's: the gateway's owner admits it into the topic's FIFO, so the
     // reply goes to the topic and its channel_overrides apply (no new session, no other route).
-    expect(gw.sent('prompt.submit')[0]).toMatchObject({ session_id: '20261105_141039_46405555', text: 'kompresör ne durumda?' })
+    expect(gw.sent('prompt.submit')[0]).toMatchObject({ session_id: '20261105_141039_46405555', text: 'how is the compressor doing?' })
     app.dispose()
   })
 
@@ -86,7 +86,7 @@ describe('a device tab', () => {
 
     expect(gw.methods('session.create')).toEqual([])
     expect(gw.methods('session.resume')).toEqual([])
-    expect(notices(app).some(n => n.includes('açık oturum yok'))).toBe(true)
+    expect(notices(app).some(n => n.includes('no open session'))).toBe(true)
 
     await must(app.stores.device).poll()
     expect(gw.methods('session.resume')).toEqual([])
@@ -95,7 +95,7 @@ describe('a device tab', () => {
     await must(app.stores.device).poll()
     expect(gw.sent('session.resume')).toEqual([{ session_id: 's-open' }])
     expect(app.session.ref.stored).toBe('s-open')
-    expect(notices(app).at(-1)).toContain('oturum açıldı (s-open)')
+    expect(notices(app).at(-1)).toContain('A session opened in the Telegram topic (s-open)')
     app.dispose()
   })
 
@@ -112,7 +112,7 @@ describe('a device tab', () => {
     expect(gw.sent('session.resume').map(p => p['session_id'])).toEqual(['s1', 's2'])
     expect(app.session.ref.stored).toBe('s2')
     expect(must(app.stores.device).current).toBe('s2')
-    expect(notices(app).at(-1)).toBe('Telegram konusu yeni oturuma geçti (session_reset): s1 → s2. Bu sekme artık yeni oturumu gösteriyor.')
+    expect(notices(app).at(-1)).toBe('Telegram topic moved to a new session (session_reset): s1 → s2. This tab now shows the new session.')
     // A device tab only watches: no end_reason, so the owner never closes the topic's session.
     expect(gw.sent('session.detach')).toEqual([{ session_id: 's1', subscription_id: 'sub-s1' }])
     app.dispose()
@@ -145,11 +145,11 @@ describe('a device tab', () => {
         .find(n => n.props['key'] === 'device')
         ?.children.map(s => (Array.isArray(s.props['spans']) ? s.props['spans'].flatMap((x: unknown) => (x && typeof x === 'object' && 't' in x && typeof x.t === 'string' ? [x.t] : [])).join('') : ''))
         .join(' | ') ?? ''
-    await vi.waitFor(() => expect(lineText()).toContain('çevrimiçi'))
+    await vi.waitFor(() => expect(lineText()).toContain('online'))
 
     expect(lineText()).toContain('📟 LG klima kutusu')
     expect(lineText()).toContain('esp32s3')
-    expect(lineText()).toContain('Telegram #1232 · canlı')
+    expect(lineText()).toContain('Telegram #1232 · live')
     // Only the read RPCs reach the box; nothing writes.
     expect(gw.calls.map(c => c.method).filter(m => m.startsWith('plugin.hermes-tern.field.'))).toEqual(expect.arrayContaining([SESSION, STATUS]))
     expect(gw.calls.every(c => !/rf_|arm_|firmware|provision/.test(c.method))).toBe(true)
@@ -201,11 +201,11 @@ describe('the device follower on its own', () => {
       endedReason: null, lastSeen: 2000, online: false, rotated: true, sessionId: 'x', sessionKey: 'k'
     })
     expect(readDeviceSession({ rotated: 'yes' })).toMatchObject({ rotated: false, sessionId: null })
-    expect(presenceOf(undefined, undefined)).toBe('bilinmiyor')
-    expect(presenceOf({ device: 'd', elapsedMs: 1, errors: { esp: 'timeout' }, reads: {}, transport: 'cloud' }, undefined)).toBe('çevrimdışı')
-    expect(presenceOf('boom', { endedReason: null, lastSeen: null, online: true, rotated: false, sessionId: null, sessionKey: null })).toBe('çevrimiçi')
-    expect(agoText(0, 10_000)).toBe('az önce')
-    expect(agoText(0, 5 * 60_000)).toBe('5 dk önce')
-    expect(agoText(0, 3 * 3600_000)).toBe('3 sa önce')
+    expect(presenceOf(undefined, undefined)).toBe('unknown')
+    expect(presenceOf({ device: 'd', elapsedMs: 1, errors: { esp: 'timeout' }, reads: {}, transport: 'cloud' }, undefined)).toBe('offline')
+    expect(presenceOf('boom', { endedReason: null, lastSeen: null, online: true, rotated: false, sessionId: null, sessionKey: null })).toBe('online')
+    expect(agoText(0, 10_000)).toBe('just now')
+    expect(agoText(0, 5 * 60_000)).toBe('5 min ago')
+    expect(agoText(0, 3 * 3600_000)).toBe('3 h ago')
   })
 })

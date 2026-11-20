@@ -491,7 +491,7 @@ class Poller:
                         if header["kind"] == "ask":
                             try:  # tell the asker instead of leaving it waiting forever
                                 self._reply({"peer": header["from"], "request_id": header["id"]}, "failed",
-                                            f"{self.cfg.name} isteği karta çeviremedi; tekrar deneyin.")
+                                            f"{self.cfg.name} could not turn the request into a card; please try again.")
                             except Exception:
                                 logger.warning("peer-mesh: could not post the failure reply", exc_info=True)
             seen.add(cid)
@@ -515,16 +515,16 @@ class Poller:
         kind, src = header["kind"], header["from"]
         if kind == "ask":
             first = (text.strip().splitlines() or [""])[0]
-            title = f"Peer isteği ({src}): {first[:80] or header['id']}"
-            body = (f"{text}\n\n---\nKaynak: hermes-mesh peer `{src}`, istek id `{header['id']}`"
+            title = f"Peer request ({src}): {first[:80] or header['id']}"
+            body = (f"{text}\n\n---\nSource: hermes-mesh peer `{src}`, request id `{header['id']}`"
                     f"{f', issue #{issue}' if issue else ''}.\n"
-                    "Bu kart tamamlanınca özeti otomatik olarak peer'a yanıt olarak gönderilir.\n"
-                    "Güvenlik: cihaza yazan (RF TX, OTA, provisioning, arm) veya dışarı mesaj gönderen işlem yapma; "
-                    "gerekiyorsa kartı engelle (kanban_block: onay bekliyor).")
+                    "When this card completes, its summary is sent back to the peer as the reply automatically.\n"
+                    "Safety: do not run anything that writes to a device (RF TX, OTA, provisioning, arm) or sends messages outside; "
+                    "if needed, block the card (kanban_block: awaiting approval).")
             task_id = self.create(title, body, self.cfg.ask_assignee, f"peer:{src}", f"hermes-mesh:{header['id']}")
             state["inbound"][task_id] = {"peer": src, "request_id": header["id"], "issue": issue,
                                          "received_at": now_iso(), "blocked_sent": False}
-            post(self.gh, self.home, self.cfg, src, "ack", f"Kanban kartı açıldı: `{task_id}` ({self.cfg.ask_assignee}).",
+            post(self.gh, self.home, self.cfg, src, "ack", f"Kanban card opened: `{task_id}` ({self.cfg.ask_assignee}).",
                  reply_to=header["id"], extra={"task_id": task_id})
         elif kind == "notify":
             status = f" ({header['status']})" if header.get("status") else ""
@@ -533,7 +533,7 @@ class Poller:
             pending = pending_path(self.home, str(header.get("reply_to") or ""))
             if pending is not None and pending.exists():
                 status = header.get("status") or "done"
-                self.say(state, f"📬 Peer {src} yanıtladı ({status}): {kanban_notify._safe(text, 1500)}")
+                self.say(state, f"📬 Peer {src} replied ({status}): {kanban_notify._safe(text, 1500)}")
                 pending.unlink(missing_ok=True)
 
     # outbound replies for inbound asks
@@ -542,16 +542,16 @@ class Poller:
             try:
                 result = self.outcome(task_id)
                 if result is None:
-                    self._reply(rec, "failed", f"Kart `{task_id}` bulunamadı (silinmiş).")
+                    self._reply(rec, "failed", f"Card `{task_id}` not found (deleted).")
                     del state["inbound"][task_id]
                     continue
                 status, detail = result
                 if status in ("done", "archived"):
-                    self._reply(rec, "done", detail.strip() or f"Kart `{task_id}` tamamlandı (özet yok).")
+                    self._reply(rec, "done", detail.strip() or f"Card `{task_id}` completed (no summary).")
                     del state["inbound"][task_id]
                 elif status == "blocked" and not rec.get("blocked_sent"):
                     post(self.gh, self.home, self.cfg, rec["peer"], "notify",
-                         f"Kart `{task_id}` engellendi: {detail or 'neden belirtilmedi'}",
+                         f"Card `{task_id}` blocked: {detail or 'no reason given'}",
                          reply_to=rec["request_id"], extra={"status": "blocked", "task_id": task_id})
                     rec["blocked_sent"] = True
                 elif status != "blocked":
@@ -569,7 +569,7 @@ class Poller:
         last = state.get("presence_at") or 0
         if self.clock() - float(last) < PRESENCE_EVERY_S:
             return
-        post(self.gh, self.home, self.cfg, "*", "presence", f"{self.cfg.name} çevrimiçi.",
+        post(self.gh, self.home, self.cfg, "*", "presence", f"{self.cfg.name} online.",
              extra={"host": socket.gethostname()})
         state["presence_at"] = self.clock()
 

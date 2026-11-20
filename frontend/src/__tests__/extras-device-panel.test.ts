@@ -1,6 +1,6 @@
 // A device tab's agent panel (extras/devicePanel.tsx): Tern's aside beside the chat, drawn from `field.agent`
-// (the box agent's mission, journal and vault note, read-only): Görev, Senden beklenenler (highlighted while
-// non-empty), Son kararlar, Protokol haritası (verified and candidate rows look different), Son işler. The
+// (the box agent's mission, journal and vault note, read-only): Mission, Needs you (highlighted while
+// non-empty), Recent decisions, Protocol map (verified and candidate rows look different), Recent work. The
 // status line's `panel` segment shows or hides it; it never sends anything.
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -22,7 +22,7 @@ const { App } = await import('../app/chat.js')
 
 vi.mock('@hermes/shared/prompt-history', () => ({ append: () => undefined, load: () => [] }))
 
-const MHI = { chatId: '5795068189', id: 'fa-7ae9b284', kind: 'mhi-vrf-gateway', name: 'MHI klima', sessionKey: 'agent:main:telegram:dm:5795068189:1409', threadId: '1409' }
+const MHI = { chatId: '5795068189', id: 'fa-7ae9b284', kind: 'mhi-vrf-gateway', name: 'MHI VRF gateway', sessionKey: 'agent:main:telegram:dm:5795068189:1409', threadId: '1409' }
 const AGENT = 'plugin.hermes-tern.field.agent'
 const SESSION = 'plugin.hermes-tern.field.session'
 const NOW = 1_794_900_000_000
@@ -31,22 +31,22 @@ const entry = (id: string, kind: string, title: string, minutesAgo: number, extr
 
 /** What field.agent answers for the MHI box: two open help requests, a decision, a map, a report and a wake. */
 const ANSWER = {
-  decisions: [entry('d1', 'decision', 'Kompresörü 22°C sabitlemeye karar verdim', 30, { body: 'Gece boyu döngüyü izlemek için.', evidence: 'session:abc' })],
+  decisions: [entry('d1', 'decision', 'Decided to hold the compressor at 22°C', 30, { body: 'To watch the cycle overnight.', evidence: 'session:abc' })],
   device: MHI.id,
   errors: {},
   facts: [
-    { evidence: 'capture:0707-a', field: 'b2.bit0', meaning: 'güç açık', status: 'verified', updated: '2026-11-19' },
+    { evidence: 'capture:0707-a', field: 'b2.bit0', meaning: 'power on', status: 'verified', updated: '2026-11-19' },
     { evidence: '', field: 'family 0707 b4', meaning: 'mod?', status: 'candidate', updated: '2026-11-18' },
-    { evidence: '', field: 'b3', meaning: 'fan hızı', status: 'rejected', updated: '2026-11-17' }
+    { evidence: '', field: 'b3', meaning: 'fan speed', status: 'rejected', updated: '2026-11-17' }
   ],
   help_requests: [
-    entry('h2', 'help_request', 'Dış ünite etiketinin fotoğrafını at', 5, { status: 'open' }),
-    entry('h1', 'help_request', 'Kumandadan modu COOL yap', 90, { status: 'open' })
+    entry('h2', 'help_request', 'Send a photo of the outdoor unit label', 5, { status: 'open' }),
+    entry('h1', 'help_request', 'Set the mode to COOL on the remote', 90, { status: 'open' })
   ],
-  mission: '# MHI VRF protokolünü çöz\n\nSadece dinle; Emir onaylamadan TX yok.',
+  mission: '# Decode the MHI VRF protocol\n\nListen only; no TX without Emir’s approval.',
   reports: [
-    entry('w1', 'wake', 'Otonom tur', 2, { reason: 'kutu yeniden çevrimiçi', trigger: 'event' }),
-    entry('r1', 'report', 'b2.bit0 doğrulandı', 40, { evidence: 'capture:0707-a' })
+    entry('w1', 'wake', 'Autonomous turn', 2, { reason: 'box back online', trigger: 'event' }),
+    entry('r1', 'report', 'b2.bit0 verified', 40, { evidence: 'capture:0707-a' })
   ]
 }
 
@@ -98,24 +98,24 @@ describe('the device agent panel', () => {
     const device = must(app.stores.device)
     await device.panel.poll()
     app.changed()
-    await vi.waitFor(() => expect(panelText(tern)).toContain('Senden beklenenler · 2'))
+    await vi.waitFor(() => expect(panelText(tern)).toContain('Needs you · 2'))
 
     const panel = must(panelNode(tern))
     const text = panelText(tern)
     expect(panel.kind).toBe('prefs')
-    expect(panel.props['title']).toBe('📟 MHI klima')
-    for (const label of ['Görev · MHI VRF protokolünü çöz', 'Senden beklenenler · 2', 'Son kararlar', 'Protokol haritası', 'Son işler']) {
+    expect(panel.props['title']).toBe('📟 MHI VRF gateway')
+    for (const label of ['Mission · Decode the MHI VRF protocol', 'Needs you · 2', 'Recent decisions', 'Protocol map', 'Recent work']) {
       expect(text).toContain(label)
     }
 
     // Open help requests stand out: a warning card with a role of its own, newest first.
     const help = must(byRole(panel, 'hermes.device.help.open')[0])
     expect(help.props['tone']).toBe('warning')
-    expect(plain(help, 120).indexOf('Dış ünite')).toBeLessThan(plain(help, 120).indexOf('Kumandadan'))
-    expect(text).toContain('Kompresörü 22°C sabitlemeye karar verdim')
-    expect(text).toContain('kaynak: session:abc')
-    expect(text).toContain('otonom tur · kutu yeniden çevrimiçi')
-    expect(text).toContain('b2.bit0 doğrulandı')
+    expect(plain(help, 120).indexOf('Send a photo')).toBeLessThan(plain(help, 120).indexOf('Set the mode'))
+    expect(text).toContain('Decided to hold the compressor at 22°C')
+    expect(text).toContain('source: session:abc')
+    expect(text).toContain('autonomous turn · box back online')
+    expect(text).toContain('b2.bit0 verified')
 
     // The protocol map: verified, candidate and rejected rows read differently.
     const table = must(byRole(panel, 'hermes.device.facts.table')[0])
@@ -130,7 +130,7 @@ describe('the device agent panel', () => {
     expect(new Set([factStatus('verified').s, factStatus('candidate').s, factStatus('rejected').s]).size).toBe(3)
 
     // The status line says what waits on the user; nothing but reads went out.
-    expect(plain(must(statusSeg(tern)), 120)).toContain('❗ 2 bekleyen')
+    expect(plain(must(statusSeg(tern)), 120)).toContain('❗ 2 pending')
     expect(gw.sent(AGENT).at(-1)).toEqual({ device: MHI.id })
     expect(gw.methods('prompt.submit')).toEqual([])
     expect(gw.calls.map(c => c.method).filter(m => m.startsWith('plugin.hermes-tern.field.') && !/\.field\.(agent|session|status)$/.test(m))).toEqual([])
@@ -142,7 +142,7 @@ describe('the device agent panel', () => {
     const device = must(app.stores.device)
     await device.panel.poll()
     app.changed()
-    await vi.waitFor(() => expect(panelText(tern)).toContain('Senden beklenenler · 2'))
+    await vi.waitFor(() => expect(panelText(tern)).toContain('Needs you · 2'))
     await vi.waitFor(() => expect(panelNode(tern)).toBeDefined())
 
     void must(statusSeg(tern)).handlers?.onClick?.({ act: 'click', ev: 'action', id: 'x', raw: {}, sf: 'hermes' })
@@ -169,7 +169,7 @@ describe('the device agent panel', () => {
 
     expect(panelNode(tern)).toBeUndefined()
     const seg = must(statusSeg(tern))
-    expect(plain(seg, 120)).toContain('❗ 2 bekleyen')
+    expect(plain(seg, 120)).toContain('❗ 2 pending')
     expect(seg.handlers?.onClick).toBeUndefined()
     app.dispose()
   })
@@ -185,9 +185,9 @@ describe('the panel on its own', () => {
     const view = () => plain(topNodes(panel.node(NOW))[0]?.children[0] ?? [], 120)
     const text = view()
     expect(text).toContain('facts: ImportError: half written')
-    expect(text).toContain('Görev dosyası yok (missions/fa-7ae9b284.md).')
-    expect(text).toContain('Şu an senden beklenen bir şey yok.')
-    expect(text).toContain('Kasada not yok (devices/fa-7ae9b284.md).')
+    expect(text).toContain('No mission file (missions/fa-7ae9b284.md).')
+    expect(text).toContain('Nothing is waiting on you right now.')
+    expect(text).toContain('No note in the vault (devices/fa-7ae9b284.md).')
     expect(panel.pending).toBe(0)
     const help = topNodes(must(panel.node(NOW))).flatMap(n => byRole(n, 'hermes.device.help'))
     expect(help[0]?.props['tone']).toBe('muted')
@@ -196,7 +196,7 @@ describe('the panel on its own', () => {
       throw new Error('unknown method')
     })
     await panel.poll()
-    expect(view()).toContain('okunamadı: unknown method')
+    expect(view()).toContain('could not read: unknown method')
     panel.dispose()
   })
 
@@ -204,8 +204,8 @@ describe('the panel on its own', () => {
     const a = must(readAgent(ANSWER))
     expect(a.helpRequests.map(h => h.id)).toEqual(['h2', 'h1'])
     expect(a.helpRequests[0]?.at).toBe(NOW - 5 * 60_000)
-    expect(a.reports[0]).toMatchObject({ kind: 'wake', reason: 'kutu yeniden çevrimiçi' })
+    expect(a.reports[0]).toMatchObject({ kind: 'wake', reason: 'box back online' })
     expect(must(readAgent({ decisions: 'x', facts: null, mission: 3 }))).toEqual({ decisions: [], errors: {}, facts: [], helpRequests: [], mission: '', reports: [] })
-    expect(missionLead('\n## Görev: kompresör\n\nmetin')).toBe('Görev: kompresör')
+    expect(missionLead('\n## Mission: compressor\n\ntext')).toBe('Mission: compressor')
   })
 })

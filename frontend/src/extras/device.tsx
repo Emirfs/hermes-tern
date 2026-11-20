@@ -48,12 +48,12 @@ export interface DeviceHost {
 }
 
 /** The box's state as the status line says it, from the last status query, else the heartbeat. */
-export function presenceOf(live: FieldStatus | string | undefined, heard: DeviceSession | undefined): 'bilinmiyor' | 'çevrimdışı' | 'çevrimiçi' {
+export function presenceOf(live: FieldStatus | string | undefined, heard: DeviceSession | undefined): 'offline' | 'online' | 'unknown' {
   if (live && typeof live !== 'string') {
-    return answered(live) ? 'çevrimiçi' : 'çevrimdışı'
+    return answered(live) ? 'online' : 'offline'
   }
 
-  return heard?.online === true ? 'çevrimiçi' : heard?.online === false ? 'çevrimdışı' : 'bilinmiyor'
+  return heard?.online === true ? 'online' : heard?.online === false ? 'offline' : 'unknown'
 }
 
 /** A device tab's follower and status line. */
@@ -152,8 +152,8 @@ export class DeviceLive {
     // After the resume, whose adopt resets the transcript.
     host.notice(
       before
-        ? `Telegram konusu yeni oturuma geçti${ended ? ` (${ended})` : ''}: ${before} → ${next}. Bu sekme artık yeni oturumu gösteriyor.`
-        : `Telegram konusunda oturum açıldı (${next}); canlı izleniyor.`
+        ? `Telegram topic moved to a new session${ended ? ` (${ended})` : ''}: ${before} → ${next}. This tab now shows the new session.`
+        : `A session opened in the Telegram topic (${next}); following live.`
     )
   }
 
@@ -182,14 +182,14 @@ export class DeviceLive {
     const live = this.#status
     const state = presenceOf(live, this.#session)
     const seenAt = live && typeof live !== 'string' && answered(live) ? this.#statusAt : this.#session?.lastSeen
-    const detail = live === undefined ? 'durum okunuyor…' : typeof live === 'string' ? `durum okunamadı: ${live}` : statusLines(live)[0]
+    const detail = live === undefined ? 'reading status…' : typeof live === 'string' ? `could not read status: ${live}` : statusLines(live)[0]
     const topic = this.#sessionError
-      ? `oturum okunamadı: ${this.#sessionError}`
+      ? `could not read session: ${this.#sessionError}`
       : this.#session && !this.#session.sessionId
-        ? 'Telegram oturumu bekleniyor'
-        : `Telegram #${d.threadId || '?'} · canlı`
+        ? 'waiting for the Telegram session'
+        : `Telegram #${d.threadId || '?'} · live`
     const pending = this.panel.pending
-    const panelText = pending ? `❗ ${pending} bekleyen` : aside ? (this.panel.open ? 'panel ▸' : 'panel ◂') : ''
+    const panelText = pending ? `❗ ${pending} pending` : aside ? (this.panel.open ? 'panel ▸' : 'panel ◂') : ''
 
     return (
       <status key="device" role="hermes.statusline">
@@ -197,10 +197,10 @@ export class DeviceLive {
         <seg
           key="state"
           priority={8}
-          role={state === 'çevrimiçi' ? 'hermes.statusline.good' : state === 'çevrimdışı' ? 'hermes.statusline.bad' : 'hermes.statusline.warn'}
+          role={state === 'online' ? 'hermes.statusline.good' : state === 'offline' ? 'hermes.statusline.bad' : 'hermes.statusline.warn'}
           spans={[{ t: state }]}
         />
-        {seenAt ? <seg key="seen" priority={6} spans={[{ t: `son görülme ${agoText(seenAt, now)}` }]} /> : null}
+        {seenAt ? <seg key="seen" priority={6} spans={[{ t: `last seen ${agoText(seenAt, now)}` }]} /> : null}
         {detail ? <seg key="detail" priority={2} spans={[{ t: detail }]} title={detail} /> : null}
         {panelText ? (
           <seg
@@ -210,7 +210,7 @@ export class DeviceLive {
             role={pending ? 'hermes.statusline.ask' : 'hermes.statusline.panel'}
             side="right"
             spans={[{ t: panelText }]}
-            title={aside ? (this.panel.open ? 'Cihaz panelini gizle' : 'Cihaz panelini göster') : 'Senden beklenenler: ajanın açık yardım istekleri'}
+            title={aside ? (this.panel.open ? 'Hide device panel' : 'Show device panel') : 'Needs you: the agent’s open help requests'}
           />
         ) : null}
         <seg key="topic" priority={7} side="right" spans={[{ t: topic }]} title={this.#session?.sessionKey ?? d.sessionKey} />

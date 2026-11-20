@@ -59,10 +59,10 @@ TITLE_MAX = 120
 DETAIL_MAX = 400
 READ_TIMEOUT_S = 5.0
 
-FAILED_KINDS = {"gave_up": "vazgeçildi", "crashed": "çöktü", "timed_out": "zaman aşımı",
-                "spawn_failed": "başlatılamadı"}
+FAILED_KINDS = {"gave_up": "gave up", "crashed": "crashed", "timed_out": "timed out",
+                "spawn_failed": "failed to start"}
 NOTIFY_KINDS = ("created", "assigned", "claimed", "completed", "blocked", *FAILED_KINDS)
-APPROVAL_HINT = "Onaylamak için: hermes kanban unblock {id}"
+APPROVAL_HINT = "To approve: hermes kanban unblock {id}"
 _LOCAL_PATH_RE = re.compile(r"(?<![\w:/])(?:/(?:Users|home|private|tmp|var|etc|workspace)/[^\s,;]+|"
                             r"[A-Za-z]:\\[^\s,;]+)")
 
@@ -105,7 +105,7 @@ def _safe(text: Any, limit: int) -> str:
         value = redact_sensitive_text(value, force=True)
     except Exception:  # outside Hermes (tests)
         pass
-    return _clip(_LOCAL_PATH_RE.sub("[yerel yol]", value), limit)
+    return _clip(_LOCAL_PATH_RE.sub("[local path]", value), limit)
 
 
 def _payload(raw: Any) -> dict[str, Any]:
@@ -127,39 +127,39 @@ def format_event(event: dict[str, Any], board: str = "default") -> Optional[str]
         return None
     p = _payload(event.get("payload"))
     tid = event.get("task_id") or "?"
-    title = _safe(event.get("title") or "(başlıksız)", TITLE_MAX)
-    who = event.get("assignee") or p.get("assignee") or "atanmamış"
+    title = _safe(event.get("title") or "(untitled)", TITLE_MAX)
+    who = event.get("assignee") or p.get("assignee") or "unassigned"
     prefix = "" if board in ("", "default", None) else f"[{board}] "
     head = f"{prefix}{tid} — {title}"
     if kind == "created":
         status = p.get("status") or event.get("status") or "?"
-        lines = [f"🆕 Yeni kart: {head}", f"👤 {who} · durum: {status}"]
+        lines = [f"🆕 New card: {head}", f"👤 {who} · status: {status}"]
         if event.get("created_by"):
-            lines[-1] += f" · oluşturan: {_clip(event['created_by'], 40)}"
+            lines[-1] += f" · created by: {_clip(event['created_by'], 40)}"
         if status == "blocked":
-            lines.append("⏸ ONAY BEKLİYOR — bu kart sizin onayınız olmadan çalışmaz.")
+            lines.append("⏸ AWAITING APPROVAL — this card will not run without your approval.")
             lines.append(APPROVAL_HINT.format(id=tid))
         return "\n".join(lines)
     if kind == "assigned":
-        before = p.get("from") or "atanmamış"
-        return f"👤 Atandı: {head}\n{before} → {p.get('assignee') or who}"
+        before = p.get("from") or "unassigned"
+        return f"👤 Assigned: {head}\n{before} → {p.get('assignee') or who}"
     if kind == "claimed":
-        return f"▶️ Başladı: {head}\n👤 {who}"
+        return f"▶️ Started: {head}\n👤 {who}"
     if kind == "completed":
         summary = _safe(p.get("summary"), DETAIL_MAX)
-        return f"✅ Tamamlandı: {head}" + (f"\n{summary}" if summary else "")
+        return f"✅ Completed: {head}" + (f"\n{summary}" if summary else "")
     if kind == "blocked":
         if p.get("reason") == "initial_status":
             return None  # the "created" message already says it waits for approval
         reason = _safe(p.get("reason"), DETAIL_MAX)
-        lines = [f"⛔ Engellendi: {head}"]
+        lines = [f"⛔ Blocked: {head}"]
         if reason:
-            lines.append(f"Neden: {reason}")
+            lines.append(f"Reason: {reason}")
         if p.get("kind") == "needs_input":
             lines.append(APPROVAL_HINT.format(id=tid))
         return "\n".join(lines)
     detail = _safe(p.get("error") or p.get("reason") or p.get("exit_kind"), DETAIL_MAX)
-    return f"❌ Başarısız ({FAILED_KINDS[kind]}): {head}" + (f"\n{detail}" if detail else "")
+    return f"❌ Failed ({FAILED_KINDS[kind]}): {head}" + (f"\n{detail}" if detail else "")
 
 
 # --- the tail --------------------------------------------------------------------------------------
@@ -265,7 +265,7 @@ class Notifier:
     def _reading(self, row: dict[str, Any], text: str) -> None:
         if self.read is None:
             return
-        title = _safe(row.get("title") or "(başlıksız)", TITLE_MAX)
+        title = _safe(row.get("title") or "(untitled)", TITLE_MAX)
         try:
             self.read(f"kanban-{row.get('task_id') or '?'}-{row.get('kind')}", f"📋 {title}", reading_markdown(text))
         except Exception as exc:

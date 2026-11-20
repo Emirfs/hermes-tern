@@ -34,17 +34,17 @@ export interface DevicePanelHost {
 export function factStatus(status: string): SpanData {
   switch (status) {
     case 'verified':
-      return { s: 'success strong', t: '✓ doğrulandı' }
+      return { s: 'success strong', t: '✓ verified' }
     case 'candidate':
-      return { s: 'warning', t: '? aday' }
+      return { s: 'warning', t: '? candidate' }
     case 'rejected':
-      return { s: 'muted del', t: '✗ reddedildi' }
+      return { s: 'muted del', t: '✗ rejected' }
     default:
       return { s: 'muted', t: status || '?' }
   }
 }
 
-/** The mission's first heading or line: what the folded Görev section says. */
+/** The mission's first heading or line: what the folded Mission section says. */
 export function missionLead(md: string): string {
   const line = md.split('\n').find(l => l.trim()) ?? ''
 
@@ -124,7 +124,7 @@ export class DevicePanel {
     const d = this.#host.device
     const a = this.#agent
     const help = a?.helpRequests ?? []
-    const problems = [...(this.#error ? [`okunamadı: ${this.#error}`] : []), ...Object.entries(a?.errors ?? {}).map(([part, why]) => `${part}: ${why}`)]
+    const problems = [...(this.#error ? [`could not read: ${this.#error}`] : []), ...Object.entries(a?.errors ?? {}).map(([part, why]) => `${part}: ${why}`)]
 
     return (
       <prefs
@@ -144,29 +144,29 @@ export class DevicePanel {
         title={`📟 ${d.name}`}
       >
         <col gap="md" key="view" role="hermes.device.panel">
-          {a === undefined && !this.#error ? <text key="loading" spans={[{ s: 'muted', t: 'Ajan dosyaları okunuyor…' }]} /> : null}
+          {a === undefined && !this.#error ? <text key="loading" spans={[{ s: 'muted', t: 'Reading the agent’s files…' }]} /> : null}
           {problems.map((p, i) => (
             <text key={`problem-${i}`} spans={[{ s: 'warning', t: p }]} wrap="word" />
           ))}
-          <section collapsed collapsible head={[{ s: 'strong', t: 'Görev' }, ...(a?.mission ? [{ s: 'muted', t: ` · ${missionLead(a.mission)}` }] : [])]} key="mission" role="hermes.device.mission">
-            {a?.mission ? <md key="md" text={a.mission} /> : <text key="none" spans={[{ s: 'muted', t: `Görev dosyası yok (missions/${d.id}.md).` }]} />}
+          <section collapsed collapsible head={[{ s: 'strong', t: 'Mission' }, ...(a?.mission ? [{ s: 'muted', t: ` · ${missionLead(a.mission)}` }] : [])]} key="mission" role="hermes.device.mission">
+            {a?.mission ? <md key="md" text={a.mission} /> : <text key="none" spans={[{ s: 'muted', t: `No mission file (missions/${d.id}.md).` }]} />}
           </section>
           <card
-            head={[{ s: 'strong', t: 'Senden beklenenler' }, ...(help.length ? [{ s: 'warning strong', t: ` · ${help.length}` }] : [])]}
+            head={[{ s: 'strong', t: 'Needs you' }, ...(help.length ? [{ s: 'warning strong', t: ` · ${help.length}` }] : [])]}
             key="help"
             role={help.length ? 'hermes.device.help.open' : 'hermes.device.help'}
             tone={help.length ? 'warning' : 'muted'}
           >
-            {help.length ? entries(help, now, 'help') : <text key="none" spans={[{ s: 'muted', t: 'Şu an senden beklenen bir şey yok.' }]} />}
+            {help.length ? entries(help, now, 'help') : <text key="none" spans={[{ s: 'muted', t: 'Nothing is waiting on you right now.' }]} />}
           </card>
-          <section collapsible head={[{ s: 'strong', t: 'Son kararlar' }]} key="decisions" role="hermes.device.decisions">
-            {a?.decisions.length ? entries(a.decisions, now, 'decisions') : <text key="none" spans={[{ s: 'muted', t: 'Henüz karar yok.' }]} />}
+          <section collapsible head={[{ s: 'strong', t: 'Recent decisions' }]} key="decisions" role="hermes.device.decisions">
+            {a?.decisions.length ? entries(a.decisions, now, 'decisions') : <text key="none" spans={[{ s: 'muted', t: 'No decisions yet.' }]} />}
           </section>
-          <section collapsible head={[{ s: 'strong', t: 'Protokol haritası' }]} key="facts" role="hermes.device.facts">
-            {a?.facts.length ? factsTable(a.facts) : <text key="none" spans={[{ s: 'muted', t: `Kasada not yok (devices/${d.id}.md).` }]} />}
+          <section collapsible head={[{ s: 'strong', t: 'Protocol map' }]} key="facts" role="hermes.device.facts">
+            {a?.facts.length ? factsTable(a.facts) : <text key="none" spans={[{ s: 'muted', t: `No note in the vault (devices/${d.id}.md).` }]} />}
           </section>
-          <section collapsible head={[{ s: 'strong', t: 'Son işler' }]} key="reports" role="hermes.device.reports">
-            {a?.reports.length ? entries(a.reports, now, 'reports') : <text key="none" spans={[{ s: 'muted', t: 'Henüz rapor yok.' }]} />}
+          <section collapsible head={[{ s: 'strong', t: 'Recent work' }]} key="reports" role="hermes.device.reports">
+            {a?.reports.length ? entries(a.reports, now, 'reports') : <text key="none" spans={[{ s: 'muted', t: 'No reports yet.' }]} />}
           </section>
         </col>
       </prefs>
@@ -181,8 +181,8 @@ function entries(rows: readonly AgentEntry[], now: number, section: 'decisions' 
       {rows.map((e, i) => {
         const meta = [
           e.at ? agoText(e.at, now) : '',
-          e.kind === 'wake' ? `otonom tur${e.reason ? ` · ${e.reason}` : ''}` : '',
-          e.evidence ? `kaynak: ${e.evidence}` : ''
+          e.kind === 'wake' ? `autonomous turn${e.reason ? ` · ${e.reason}` : ''}` : '',
+          e.evidence ? `source: ${e.evidence}` : ''
         ].filter(Boolean)
 
         return (
@@ -202,10 +202,10 @@ function factsTable(facts: readonly AgentFact[]): JSX.Element {
   return (
     <table
       cols={[
-        { head: 'Alan', id: 'field' },
-        { grow: 1, head: 'Anlam', id: 'meaning' },
-        { head: 'Durum', id: 'status' },
-        { head: 'Kanıt', id: 'evidence', priority: 1, truncate: 'middle' }
+        { head: 'Field', id: 'field' },
+        { grow: 1, head: 'Meaning', id: 'meaning' },
+        { head: 'Status', id: 'status' },
+        { head: 'Evidence', id: 'evidence', priority: 1, truncate: 'middle' }
       ]}
       key="table"
       role="hermes.device.facts.table"

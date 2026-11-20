@@ -15,9 +15,9 @@ describe('split commands', () => {
       ])
     }
   })
-  it('runs on Windows without env or shell interpolation and preserves quotes, JSON and Turkish text', () => {
-    const env = { HERMES_HOME: 'C:\\Users\\a b\\hermes', HERMES_TERN_WATCH: '{"name":"çığ\'da $x %HOME%", "goal":"a \\"quote\\""}' }
-    const args = ['a "b" c', "x'y", '$HOME', '%PATH%', 'a&b', 'çığ']
+  it('runs on Windows without env or shell interpolation and preserves quotes, JSON and non-ASCII text', () => {
+    const env = { HERMES_HOME: 'C:\\Users\\a b\\hermes', HERMES_TERN_WATCH: '{"name":"zażółć\'s $x %HOME%", "goal":"a \\"quote\\""}' }
+    const args = ['a "b" c', "x'y", '$HOME', '%PATH%', 'a&b', 'zażółć']
     const command = splitProgram(env, [process.execPath, '-e', 'console.log(JSON.stringify({home:process.env.HERMES_HOME,watch:process.env.HERMES_TERN_WATCH,args:process.argv.slice(1)}))', ...args], 'win32')
     expect(command[0]).toBe(process.execPath)
     expect(command).not.toContain('env')

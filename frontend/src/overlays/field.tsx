@@ -1,4 +1,4 @@
-// /field: provisioned boxes, their platform heartbeat, and a read-only status preview. Enter (Canlı sohbet)
+// /field: provisioned boxes, their platform heartbeat, and a read-only status preview. Enter (Live chat)
 // opens the box's live tab in Tern's ESP session: its Telegram topic's own conversation, watched and
 // answerable there (extras/device.tsx). N starts a separate new chat about the box, primed with
 // field-device-chat. R re-reads that device's status.
@@ -29,7 +29,7 @@ export async function liveDeviceTab(host: Pick<FieldSheetHost, 'changed' | 'tran
   open: typeof openEspTabs = openEspTabs): Promise<void> {
   if (!d.topic) throw new Error(`${d.name} has no Telegram topic; N starts a separate device chat instead.`)
   await open(launchEnv().hermes, d.id)
-  host.transcript.notice(`${d.name}: canlı sohbet sekmesi ESP oturumunda açıldı.`, 'success')
+  host.transcript.notice(`${d.name}: live chat tab opened in the ESP session.`, 'success')
   host.changed()
 }
 
@@ -78,7 +78,7 @@ export function openField(host: FieldSheetHost, focus?: string) {
     if (!d) return
     host.close(overlay)
     void liveDeviceTab(host, d).catch((e: unknown) => {
-      host.transcript.notice(`Canlı sohbet açılamadı: ${errorText(e)}`, 'error')
+      host.transcript.notice(`Could not open live chat: ${errorText(e)}`, 'error')
       host.changed()
     })
   }
@@ -110,7 +110,7 @@ export function openField(host: FieldSheetHost, focus?: string) {
         columns={[{ id: 'online', head: 'Heartbeat', priority: 1 }, { id: 'seen', head: 'Last seen', format: 'dim', priority: 2 }]}
         order={list.map(d => d.id)} {...optional('selected', selected)} total={list.length}
         subtitle={[{ s: 'muted', t: state ? `Field AI platform: ${state.platformState ?? 'unknown'} · ${state.transport} · read-only status` : 'Read-only status' }]}
-        actions={[{ id: 'live', label: 'Canlı sohbet', keys: ['enter'], primary: true }, { id: 'chat', label: 'New device chat', keys: ['n'] }, { id: 'status', label: 'Read status', keys: ['r'] }, { id: 'refresh', label: 'Refresh list', keys: ['shift+r'] }, { id: 'close', label: 'Close', keys: ['esc'], end: true }]}
+        actions={[{ id: 'live', label: 'Live chat', keys: ['enter'], primary: true }, { id: 'chat', label: 'New device chat', keys: ['n'] }, { id: 'status', label: 'Read status', keys: ['r'] }, { id: 'refresh', label: 'Refresh list', keys: ['shift+r'] }, { id: 'close', label: 'Close', keys: ['esc'], end: true }]}
         onAction={{ chat, close: () => host.close(overlay), live, refresh: () => void read(), status: () => loadStatus(d, true) }}
         onSelect={ev => { selected = ev.item; host.changed() }} onActivate={ev => { selected = ev.item; live() }}>
         {d ? <col key="detail" gap="md">

@@ -22,22 +22,22 @@ def header(**kw):
 
 
 def test_encode_parse_round_trip_strips_the_banner():
-    body = peer.encode(header(), "Diskte ne kadar yer var?\nikinci satır")
+    body = peer.encode(header(), "How much disk space is left?\nsecond line")
     assert body.startswith("<!-- hermes-mesh {") and "> **b → a** · ask · `b-1-aa`" in body
     h, text = peer.parse(body)
-    assert h["kind"] == "ask" and h["from"] == "b" and text == "Diskte ne kadar yer var?\nikinci satır"
+    assert h["kind"] == "ask" and h["from"] == "b" and text == "How much disk space is left?\nsecond line"
 
 
 def test_a_value_cannot_close_the_html_comment():
-    body = peer.encode(header(note="--> sonra"), "x")
+    body = peer.encode(header(note="--> after"), "x")
     assert body.count("-->") == 1
-    assert peer.parse(body)[0]["note"] == "--> sonra"
+    assert peer.parse(body)[0]["note"] == "--> after"
 
 
 @pytest.mark.parametrize("body", [
-    None, "düz yorum", "<!-- hermes-mesh {bozuk -->",
-    peer.encode(header(v=2), "x"), peer.encode(header(kind="sil"), "x"), peer.encode(header(**{"from": "B C"}), "x"),
-    peer.encode(header(to="x/y"), "x"), peer.encode(header(status="belki"), "x"), peer.encode(header(id=""), "x"),
+    None, "plain comment", "<!-- hermes-mesh {broken -->",
+    peer.encode(header(v=2), "x"), peer.encode(header(kind="delete"), "x"), peer.encode(header(**{"from": "B C"}), "x"),
+    peer.encode(header(to="x/y"), "x"), peer.encode(header(status="maybe"), "x"), peer.encode(header(id=""), "x"),
 ])
 def test_invalid_messages_are_ignored(body):
     assert peer.parse(body) is None
@@ -213,20 +213,20 @@ def test_inbound_ask_becomes_one_card_acked_then_answered_when_done(tmp_path, re
     a, _, cards = make_poller(tmp_path, repo, "a")
     b, _, _ = make_poller(tmp_path, repo, "b")
     a.tick()  # seeds the cursor, posts presence
-    hdr, number, _ = peer.post(repo, b.home, b.cfg, "a", "ask", "Disk durumu nedir?")
+    hdr, number, _ = peer.post(repo, b.home, b.cfg, "a", "ask", "What is the disk status?")
     assert repo.issues[-1]["title"] == "mesh: a ↔ b" and repo.issues[-1]["labels"] == ["hermes-mesh"]
     a.tick()
     (card,) = cards.values()
-    assert card["assignee"] == "kodcu" and card["created_by"] == "peer:b" and "Disk durumu nedir?" in card["body"]
+    assert card["assignee"] == "kodcu" and card["created_by"] == "peer:b" and "What is the disk status?" in card["body"]
     assert f"`{hdr['id']}`" in card["body"]
     ack = [m for m in messages(repo) if m and m[0]["kind"] == "ack"]
     assert ack and ack[0][0]["reply_to"] == hdr["id"] and ack[0][0]["task_id"] == card["id"]
     a.tick()  # nothing new: no second card, no reply yet
     assert len(cards) == 1 and not [m for m in messages(repo) if m and m[0]["kind"] == "reply"]
-    card["status"], card["detail"] = "done", "%42 dolu"
+    card["status"], card["detail"] = "done", "42% full"
     a.tick()
     (reply,) = [m for m in messages(repo) if m and m[0]["kind"] == "reply"]
-    assert reply[0]["reply_to"] == hdr["id"] and reply[0]["status"] == "done" and reply[1] == "%42 dolu"
+    assert reply[0]["reply_to"] == hdr["id"] and reply[0]["status"] == "done" and reply[1] == "42% full"
     assert reply[0]["from"] == "a" and reply[0]["to"] == "b"
     state = json.loads((a.home / "hermes-tern" / peer.STATE_FILE).read_text(encoding="utf-8"))
     assert state["inbound"] == {} and "b" in state["peers"]
@@ -236,38 +236,38 @@ def test_a_blocked_card_is_reported_once(tmp_path, repo):
     a, _, cards = make_poller(tmp_path, repo, "a")
     b, _, _ = make_poller(tmp_path, repo, "b")
     a.tick()
-    peer.post(repo, b.home, b.cfg, "a", "ask", "RF gönder")
+    peer.post(repo, b.home, b.cfg, "a", "ask", "Send RF")
     a.tick()
     (card,) = cards.values()
-    card["status"], card["detail"] = "blocked", "onay bekliyor"
+    card["status"], card["detail"] = "blocked", "awaiting approval"
     a.tick()
     a.tick()
     blocked = [m for m in messages(repo) if m and m[0].get("status") == "blocked"]
-    assert len(blocked) == 1 and "onay bekliyor" in blocked[0][1]
+    assert len(blocked) == 1 and "awaiting approval" in blocked[0][1]
 
 
 def test_only_the_owner_and_only_messages_to_us_count(tmp_path, repo):
     a, sink, cards = make_poller(tmp_path, repo, "a")
     a.tick()
     repo.issues.append({"number": 9, "title": "mesh: a ↔ b"})
-    repo.add_comment(9, peer.encode(header(kind="notify", id="b-2"), "yabancı"), login="mallory")
-    repo.add_comment(9, peer.encode(header(kind="notify", id="b-3", to="c"), "başkasına"))
-    repo.add_comment(9, peer.encode(header(kind="notify", id="b-4"), "merhaba a"))
-    repo.add_comment(9, peer.encode(header(kind="ask", id="a-5", **{"from": "a", "to": "b"}), "kendi mesajım"))
+    repo.add_comment(9, peer.encode(header(kind="notify", id="b-2"), "stranger"), login="mallory")
+    repo.add_comment(9, peer.encode(header(kind="notify", id="b-3", to="c"), "for someone else"))
+    repo.add_comment(9, peer.encode(header(kind="notify", id="b-4"), "hello a"))
+    repo.add_comment(9, peer.encode(header(kind="ask", id="a-5", **{"from": "a", "to": "b"}), "my own message"))
     a.tick()
-    assert sink == ["📨 Peer b: merhaba a"] and cards == {}
+    assert sink == ["📨 Peer b: hello a"] and cards == {}
 
 
 def test_the_comment_list_is_fetched_with_etag_and_304_costs_nothing(tmp_path, repo):
     a, sink, _ = make_poller(tmp_path, repo, "a")
     a.tick()
     repo.issues.append({"number": 9, "title": "mesh: a ↔ b"})
-    repo.add_comment(9, peer.encode(header(kind="notify", id="b-4"), "bir"))
+    repo.add_comment(9, peer.encode(header(kind="notify", id="b-4"), "one"))
     a.tick()
     a.tick()
     lists = [c for c in repo.calls if c[1].endswith("/issues/comments")]
     assert lists[-1][3] is not None  # sent If-None-Match
-    assert sink == ["📨 Peer b: bir"]  # not re-delivered by the repeated fetch
+    assert sink == ["📨 Peer b: one"]  # not re-delivered by the repeated fetch
 
 
 def test_a_late_reply_to_a_timed_out_ask_reaches_the_kanban_topic(tmp_path, repo):
@@ -276,10 +276,10 @@ def test_a_late_reply_to_a_timed_out_ask_reaches_the_kanban_topic(tmp_path, repo
     pending = peer.pending_path(a.home, "a-1-ff")
     peer.write_json(pending, {"peer": "b"})
     repo.issues.append({"number": 9, "title": "mesh: a ↔ b"})
-    repo.add_comment(9, peer.encode(header(kind="reply", id="b-9", reply_to="a-1-ff", status="done"), "cevap"))
-    repo.add_comment(9, peer.encode(header(kind="reply", id="b-10", reply_to="a-other", status="done"), "senkron"))
+    repo.add_comment(9, peer.encode(header(kind="reply", id="b-9", reply_to="a-1-ff", status="done"), "answer"))
+    repo.add_comment(9, peer.encode(header(kind="reply", id="b-10", reply_to="a-other", status="done"), "unrelated"))
     a.tick()
-    assert sink == ["📬 Peer b yanıtladı (done): cevap"] and not pending.exists()
+    assert sink == ["📬 Peer b replied (done): answer"] and not pending.exists()
 
 
 def test_undelivered_topic_messages_wait_in_the_outbox(tmp_path, repo):
@@ -289,19 +289,19 @@ def test_undelivered_topic_messages_wait_in_the_outbox(tmp_path, repo):
     a.notify = lambda t: up["ok"] and (sink.append(t) or True)
     a.tick()
     repo.issues.append({"number": 9, "title": "mesh: a ↔ b"})
-    repo.add_comment(9, peer.encode(header(kind="notify", id="b-4"), "sonra"))
+    repo.add_comment(9, peer.encode(header(kind="notify", id="b-4"), "later"))
     a.tick()
     assert sink == []
     up["ok"] = True
     a.tick()
-    assert sink == ["📨 Peer b: sonra"]
+    assert sink == ["📨 Peer b: later"]
 
 
 def test_wait_reply_returns_the_reply_and_the_ack(tmp_path, repo):
     a, _, _ = make_poller(tmp_path, repo, "a")
     b, _, cards = make_poller(tmp_path, repo, "b")
     b.tick()
-    hdr, number, _ = peer.post(repo, a.home, a.cfg, "b", "ask", "saat kaç?")
+    hdr, number, _ = peer.post(repo, a.home, a.cfg, "b", "ask", "what time is it?")
     b.tick()
     next(iter(cards.values()))["status"] = "done"
     next(iter(cards.values()))["detail"] = "12:00"
@@ -321,7 +321,7 @@ def test_wait_reply_times_out(tmp_path, repo):
 
 def test_tools_validate_arguments(tmp_path, monkeypatch):
     monkeypatch.setattr(peer.socket, "gethostname", lambda: "pc-a")
-    assert "peer must be" in peer.peer_send_tool({"peer": "Kötü İsim", "text": "x"})
+    assert "peer must be" in peer.peer_send_tool({"peer": "Bad Name", "text": "x"})
     assert "own peer name" in peer.peer_send_tool({"peer": "pc-a", "text": "x"})
     assert "text is empty" in peer.peer_ask_tool({"peer": "pc-b", "text": "  "})
 
@@ -340,7 +340,7 @@ def test_a_failed_ask_is_retried_next_tick(tmp_path, repo):
     a.create = flaky
     a.tick()
     repo.issues.append({"number": 9, "title": "mesh: a ↔ b"})
-    repo.add_comment(9, peer.encode(header(id="b-7"), "tekrar dene"))
+    repo.add_comment(9, peer.encode(header(id="b-7"), "try again"))
     a.tick()
     assert cards == {}
     a.tick()
@@ -356,7 +356,7 @@ def test_an_ask_that_keeps_failing_is_answered_failed(tmp_path, repo):
     a.create = broken
     a.tick()
     repo.issues.append({"number": 9, "title": "mesh: a ↔ b"})
-    repo.add_comment(9, peer.encode(header(id="b-8"), "olmayacak"))
+    repo.add_comment(9, peer.encode(header(id="b-8"), "will never work"))
     for _ in range(6):
         a.tick()
     replies = [m for m in messages(repo) if m and m[0]["kind"] == "reply"]

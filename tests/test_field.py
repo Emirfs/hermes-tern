@@ -92,7 +92,7 @@ def test_host_dir_is_the_field_ai_servers_script_folder(box):
 def test_devices_list_boxes_topics_and_what_the_platform_heard_without_keys(box, monkeypatch):
     runner = types.SimpleNamespace(adapters={"tg": types.SimpleNamespace(platform=types.SimpleNamespace(value="telegram")),
                                              "fa": adapter({"fa-61d44cb4": True}, {"fa-61d44cb4": 1794900000.5},
-                                                           {"fa-61d44cb4": {"fw": "0.1.4", "ssid": "saha", "rssi": -61, "ip": None}})})
+                                                           {"fa-61d44cb4": {"fw": "0.1.4", "ssid": "lab", "rssi": -61, "ip": None}})})
     monkeypatch.setitem(sys.modules, "gateway.run_api", types.SimpleNamespace(_ACTIVE_RUNNER=runner))
     out = field.devices({})
     assert "key" not in json.dumps(out["devices"])
@@ -101,7 +101,7 @@ def test_devices_list_boxes_topics_and_what_the_platform_heard_without_keys(box,
     lg, mhi = out["devices"]
     assert lg == {"id": "fa-61d44cb4", "name": "LG klima kutusu", "kind": "field-ai-box",
                   "topic": {"thread_id": 1232, "name": TOPICS["fa-61d44cb4"]["name"]},
-                  "online": True, "last_seen": 1794900000.5, "fw": "0.1.4", "ssid": "saha", "rssi": -61}
+                  "online": True, "last_seen": 1794900000.5, "fw": "0.1.4", "ssid": "lab", "rssi": -61}
     # A topic only config.yaml names is matched by the device id its name ends with.
     assert mhi["topic"] == {"thread_id": "1409", "name": "📟 MHI VRF gateway · fa-7ae9b284",
                             "chat_id": "5795068189", "target": "telegram:5795068189:1409"}
@@ -356,7 +356,7 @@ def vault(tmp_path, monkeypatch):
 
 def test_agent_lists_open_help_requests_decisions_and_work_newest_first(box, vault):
     (box.repo / "missions").mkdir()
-    (box.repo / "missions" / f"{MHI}.md").write_text("# Görev\nMHI VRF protokolünü çöz.", encoding="utf-8")
+    (box.repo / "missions" / f"{MHI}.md").write_text("# Mission\nDecode the MHI VRF protocol.", encoding="utf-8")
     (vault / ".tools" / "device_notes.py").write_text(NOTES_MODULE, encoding="utf-8")
     (vault / "devices" / f"{MHI}.md").write_text("---\ntype: device\n---\n", encoding="utf-8")
     journal(box.repo, [
@@ -367,20 +367,20 @@ def test_agent_lists_open_help_requests_decisions_and_work_newest_first(box, vau
         entry("h2", "help_request", 3.0, status="open"),
         entry("r1", "report", 4.0),
         {"id": "x1", "ts": 5.0, "device": MHI, "kind": "help_done", "ref": "h1"},
-        entry("w1", "wake", 6.0, reason="kutu yeniden çevrimiçi", trigger="event"),
+        entry("w1", "wake", 6.0, reason="box back online", trigger="event"),
         entry("p1", "protocol_finding", 7.0, field="b2.bit0", meaning="power", status="verified"),
-        entry("f1", "followup", 8.0, due_ts=99.0, reason="tekrar bak"),
+        entry("f1", "followup", 8.0, due_ts=99.0, reason="look again"),
         entry("u1", "some_future_kind", 9.0),
         {**entry("o1", "decision", 10.0), "device": "fa-61d44cb4"},
         entry("d2", "decision", 11.0, extra_field={"ignored": True}),
         entry("h3", "help_request", 12.0, status="open"),
     ])
     out = field.agent({"device": MHI})
-    assert out["device"] == MHI and out["mission"].startswith("# Görev") and out["errors"] == {}
+    assert out["device"] == MHI and out["mission"].startswith("# Mission") and out["errors"] == {}
     assert [h["id"] for h in out["help_requests"]] == ["h3", "h2"]
     assert [d["id"] for d in out["decisions"]] == ["d2", "d1"]
     assert [r["id"] for r in out["reports"]] == ["w1", "r1"]
-    assert out["reports"][0]["reason"] == "kutu yeniden çevrimiçi" and out["reports"][0]["trigger"] == "event"
+    assert out["reports"][0]["reason"] == "box back online" and out["reports"][0]["trigger"] == "event"
     assert set(out["decisions"][0]) == {"id", "ts", "kind", "title", "body", "evidence"}
     assert [f["field"] for f in out["facts"]] == ["b2.bit0", "family 0707 b4"]
     assert out["facts"][1] == {"field": "family 0707 b4", "meaning": "mode?", "status": "candidate", "evidence": "",

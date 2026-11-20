@@ -28,17 +28,17 @@ existing tools and approval flow. Connection status is not a device safety or em
 | `hermes tern --device <id\|alias\|name>` | The box's own Telegram-topic session, live: Telegram/cron turns stream in, what you type goes into the topic's FIFO (reply goes to the topic, its `channel_overrides` apply). Waits while the topic has no open session and follows a `session_reset` to the new one. A status line shows online/offline/last seen from read-only reads. |
 | `hermes tern --list-devices` | JSON array of boxes: `id, name, thread_id, session_key, session_id, platform` (no Tern pane needed) |
 | `hermes tern --esp-tabs [device]`, `/esp [device]` | Opens/focuses Tern's `ESP` session: one tab per box, named after it, running `--device <id>`; idempotent |
-| `/field` → Enter (Canlı sohbet) | Opens that box's live tab; N still starts a separate device chat |
+| `/field` → Enter (Live chat) | Opens that box's live tab; N still starts a separate device chat |
 
 A device tab only watches: leaving it never closes the topic's session.
 
 Beside the chat (Tern's aside) a device tab shows its box agent's panel, read every 10 s through
-`field.agent` from files only: **Görev** (`field-ai-box/missions/<id>.md`), **Senden beklenenler** (open
-`help_request`s of `private/agents/<id>/journal.jsonl`, highlighted while any is open), **Son kararlar**,
-**Protokol haritası** (the facts of the memory vault's `devices/<id>.md`, read through
-`hafiza/.tools/device_notes.py`; verified, candidate and rejected rows look different) and **Son işler**
+`field.agent` from files only: **Mission** (`field-ai-box/missions/<id>.md`), **Needs you** (open
+`help_request`s of `private/agents/<id>/journal.jsonl`, highlighted while any is open), **Recent decisions**,
+**Protocol map** (the facts of the memory vault's `devices/<id>.md`, read through
+`hafiza/.tools/device_notes.py`; verified, candidate and rejected rows look different) and **Recent work**
 (reports and the waker's turns). The status line's `panel` segment hides or shows it (and says
-`❗ N bekleyen` while requests wait); `/sidebar` takes the edge while open. The panel never sends anything.
+`❗ N pending` while requests wait); `/sidebar` takes the edge while open. The panel never sends anything.
 The vault is `HAFIZA_DIR`, else the folder above the `hafiza_mcp.py` script config.yaml runs.
 
 ### Models, accounts and fallbacks

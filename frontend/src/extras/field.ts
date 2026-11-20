@@ -35,9 +35,9 @@ export const FIELD_COMMANDS: readonly LocalCommand[] = [
 
       try {
         const out = await openEspTabs(launchEnv().hermes, focus || undefined)
-        host.transcript.notice(out ? `ESP oturumu hazır:\n${out}` : 'ESP oturumu hazır.', 'success')
+        host.transcript.notice(out ? `ESP session ready:\n${out}` : 'ESP session ready.', 'success')
       } catch (e) {
-        host.transcript.notice(`ESP sekmeleri açılamadı: ${errorText(e)}`, 'error')
+        host.transcript.notice(`Could not open the ESP tabs: ${errorText(e)}`, 'error')
       }
     }
   }

@@ -201,7 +201,7 @@ export class SessionLifecycle {
     try {
       if (!resume && host.launch.device) {
         // A device tab whose topic has no open session: it shows the topic's once one opens (extras/device.ts).
-        host.transcript.notice(`${host.launch.device.name}: Telegram konusunda açık oturum yok; ilk mesajla açılınca buraya bağlanacak.`)
+        host.transcript.notice(`${host.launch.device.name}: no open session in the Telegram topic; this tab will attach once the first message opens one.`)
         host.changed()
 
         return

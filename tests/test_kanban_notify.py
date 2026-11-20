@@ -15,7 +15,7 @@ from hermes_tern_plugin.backend.gateway import kanban_notify as kn
 
 
 def ev(kind, payload=None, **extra):
-    row = {"id": 1, "task_id": "t_abc", "kind": kind, "payload": json.dumps(payload or {}), "title": "Rapor yaz",
+    row = {"id": 1, "task_id": "t_abc", "kind": kind, "payload": json.dumps(payload or {}), "title": "Write report",
            "assignee": "kodcu", "status": "ready", "created_by": "carly"}
     row.update(extra)
     return row
@@ -23,26 +23,26 @@ def ev(kind, payload=None, **extra):
 
 def test_created_says_who_and_status():
     text = kn.format_event(ev("created", {"assignee": "kodcu", "status": "ready"}))
-    assert text.startswith("🆕 Yeni kart: t_abc — Rapor yaz")
-    assert "kodcu" in text and "durum: ready" in text and "oluşturan: carly" in text
-    assert "ONAY" not in text
+    assert text.startswith("🆕 New card: t_abc — Write report")
+    assert "kodcu" in text and "status: ready" in text and "created by: carly" in text
+    assert "APPROVAL" not in text
 
 
 def test_a_card_created_blocked_says_it_waits_for_approval_and_how_to_give_it():
     text = kn.format_event(ev("created", {"status": "blocked"}))
-    assert "ONAY BEKLİYOR" in text and "hermes kanban unblock t_abc" in text
+    assert "AWAITING APPROVAL" in text and "hermes kanban unblock t_abc" in text
     # The paired initial "blocked" event is folded into the created message.
     assert kn.format_event(ev("blocked", {"reason": "initial_status"})) is None
 
 
 @pytest.mark.parametrize("kind,payload,expect", [
-    ("assigned", {"assignee": "mimar", "from": "kodcu"}, "👤 Atandı: t_abc — Rapor yaz\nkodcu → mimar"),
-    ("claimed", {"run_id": 3}, "▶️ Başladı: t_abc — Rapor yaz\n👤 kodcu"),
-    ("completed", {"summary": "bitti, 3 dosya"}, "✅ Tamamlandı: t_abc — Rapor yaz\nbitti, 3 dosya"),
-    ("blocked", {"reason": "anahtar lazım", "kind": "needs_input"}, "⛔ Engellendi: t_abc — Rapor yaz\nNeden: anahtar lazım"),
-    ("gave_up", {"error": "model yok"}, "❌ Başarısız (vazgeçildi): t_abc — Rapor yaz\nmodel yok"),
-    ("crashed", {}, "❌ Başarısız (çöktü): t_abc — Rapor yaz"),
-    ("timed_out", {}, "❌ Başarısız (zaman aşımı): t_abc — Rapor yaz"),
+    ("assigned", {"assignee": "mimar", "from": "kodcu"}, "👤 Assigned: t_abc — Write report\nkodcu → mimar"),
+    ("claimed", {"run_id": 3}, "▶️ Started: t_abc — Write report\n👤 kodcu"),
+    ("completed", {"summary": "done, 3 files"}, "✅ Completed: t_abc — Write report\ndone, 3 files"),
+    ("blocked", {"reason": "key needed", "kind": "needs_input"}, "⛔ Blocked: t_abc — Write report\nReason: key needed"),
+    ("gave_up", {"error": "no model"}, "❌ Failed (gave up): t_abc — Write report\nno model"),
+    ("crashed", {}, "❌ Failed (crashed): t_abc — Write report"),
+    ("timed_out", {}, "❌ Failed (timed out): t_abc — Write report"),
 ])
 def test_each_notified_kind(kind, payload, expect):
     assert kn.format_event(ev(kind, payload)).startswith(expect)
@@ -50,12 +50,12 @@ def test_each_notified_kind(kind, payload, expect):
 
 def test_quiet_kinds_and_board_prefix():
     assert kn.format_event(ev("heartbeat")) is None and kn.format_event(ev("commented")) is None
-    assert kn.format_event(ev("claimed"), "saha").startswith("▶️ Başladı: [saha] t_abc")
+    assert kn.format_event(ev("claimed"), "field").startswith("▶️ Started: [field] t_abc")
 
 
 def test_long_text_and_local_paths_are_trimmed():
-    text = kn.format_event(ev("completed", {"summary": "yazıldı C:\\Users\\emir\\gizli.txt " + "x" * 900}))
-    assert "C:\\Users" not in text and "[yerel yol]" in text
+    text = kn.format_event(ev("completed", {"summary": "wrote C:\\Users\\emir\\secret.txt " + "x" * 900}))
+    assert "C:\\Users" not in text and "[local path]" in text
     assert len(text.splitlines()[1]) <= kn.DETAIL_MAX
 
 
@@ -73,7 +73,7 @@ class Board:
         self.path = path
         with sqlite3.connect(path) as conn:
             conn.executescript(SCHEMA)
-            conn.execute("INSERT INTO tasks VALUES ('t1', 'İlk iş', 'kodcu', 'ready', 'user')")
+            conn.execute("INSERT INTO tasks VALUES ('t1', 'First task', 'kodcu', 'ready', 'user')")
 
     def add(self, kind, payload=None, at=None):
         with sqlite3.connect(self.path) as conn:
@@ -109,9 +109,9 @@ def test_first_pass_starts_at_the_newest_event_then_sends_new_ones_in_order(home
     assert n.tick() == 0 and sent == []  # no history replay
     board.add("claimed")
     board.add("heartbeat")
-    board.add("completed", {"summary": "tamam"})
+    board.add("completed", {"summary": "done"})
     assert n.tick() == 2
-    assert [s.split(":")[0] for s in sent] == ["▶️ Başladı", "✅ Tamamlandı"]
+    assert [s.split(":")[0] for s in sent] == ["▶️ Started", "✅ Completed"]
     state = json.loads((home / "hermes-tern" / kn.STATE_FILE).read_text(encoding="utf-8"))
     assert state["cursors"]["default"] == 4
 
@@ -155,16 +155,16 @@ def test_stale_events_are_skipped(home, board):
 
 
 def test_without_a_topic_messages_go_to_the_log(home):
-    assert kn.send_to_topic("deneme", home) is True
-    assert "deneme" in (home / "hermes-tern" / kn.LOG_FILE).read_text(encoding="utf-8")
+    assert kn.send_to_topic("trial", home) is True
+    assert "trial" in (home / "hermes-tern" / kn.LOG_FILE).read_text(encoding="utf-8")
     kn.write_json(home / "hermes-tern" / kn.CONFIG_FILE, {"chat_id": "1", "thread_id": 2, "dry_run": True})
-    assert kn.send_to_topic("ikinci", home) is True
-    assert "ikinci" in (home / "hermes-tern" / kn.LOG_FILE).read_text(encoding="utf-8")
+    assert kn.send_to_topic("second", home) is True
+    assert "second" in (home / "hermes-tern" / kn.LOG_FILE).read_text(encoding="utf-8")
 
 
 def test_with_a_topic_but_no_gateway_it_waits(home):
     kn.write_json(home / "hermes-tern" / kn.CONFIG_FILE, {"platform": "telegram", "chat_id": "1", "thread_id": 2})
-    assert kn.send_to_topic("bekle", home) is False
+    assert kn.send_to_topic("wait", home) is False
 
 
 def test_a_new_worker_replaces_the_previous_one_of_the_same_name():
@@ -209,12 +209,12 @@ def test_each_delivered_message_also_queues_a_reading_tab(home, board):
     n.tick()
     board.add("claimed")
     board.add("heartbeat")
-    board.add("completed", {"summary": "rapor hazır"})
+    board.add("completed", {"summary": "report ready"})
     assert n.tick() == 2
-    assert [(key, title) for key, title, _ in tabs] == [("kanban-t1-claimed", "📋 İlk iş"), ("kanban-t1-completed", "📋 İlk iş")]
-    assert tabs[1][2] == "✅ Tamamlandı: t1 — İlk iş\n\nrapor hazır\n" and sent[1] == "✅ Tamamlandı: t1 — İlk iş\nrapor hazır"
+    assert [(key, title) for key, title, _ in tabs] == [("kanban-t1-claimed", "📋 First task"), ("kanban-t1-completed", "📋 First task")]
+    assert tabs[1][2] == "✅ Completed: t1 — First task\n\nreport ready\n" and sent[1] == "✅ Completed: t1 — First task\nreport ready"
     up["ok"] = False
-    board.add("blocked", {"reason": "girdi lazım"})
+    board.add("blocked", {"reason": "input needed"})
     assert n.tick() == 0 and len(tabs) == 2  # nothing delivered, no tab
 
 
@@ -222,7 +222,7 @@ def test_a_failing_reader_never_holds_the_telegram_message(home, board):
     sent = []
 
     def broken(*_):
-        raise RuntimeError("tern-bridge yok")
+        raise RuntimeError("tern-bridge missing")
 
     n = kn.Notifier(home, lambda t: sent.append(t) or True, sources=lambda: [("default", board.path)], read=broken)
     n.tick()
@@ -240,16 +240,16 @@ class FakeRun:
         self.calls.append((argv, kw))
         if self.raises:
             raise self.raises
-        return subprocess.CompletedProcess(argv, self.returncode, b"", b"bozuk")
+        return subprocess.CompletedProcess(argv, self.returncode, b"", b"broken")
 
 
 def test_run_read_hands_the_markdown_to_tern_bridge_read_on_stdin():
     run = FakeRun()
-    assert kn.run_read("kanban-t1-claimed", "📋 İlk iş", "▶️ Başladı\n", run=run, find=lambda: "C:/bin/tern-bridge.cmd")
+    assert kn.run_read("kanban-t1-claimed", "📋 First task", "▶️ Started\n", run=run, find=lambda: "C:/bin/tern-bridge.cmd")
     (argv, kw), = run.calls
-    assert argv == ["C:/bin/tern-bridge.cmd", "read", "--key", "kanban-t1-claimed", "--title", "📋 İlk iş",
+    assert argv == ["C:/bin/tern-bridge.cmd", "read", "--key", "kanban-t1-claimed", "--title", "📋 First task",
                     "--from", "kanban", "-"]
-    assert kw["input"] == "▶️ Başladı\n".encode("utf-8") and kw["timeout"] == kn.READ_TIMEOUT_S
+    assert kw["input"] == "▶️ Started\n".encode("utf-8") and kw["timeout"] == kn.READ_TIMEOUT_S
 
 
 def test_run_read_swallows_a_missing_cli_a_timeout_and_a_failed_exit(caplog):
@@ -258,7 +258,7 @@ def test_run_read_swallows_a_missing_cli_a_timeout_and_a_failed_exit(caplog):
     timeout = subprocess.TimeoutExpired(["tern-bridge"], kn.READ_TIMEOUT_S)
     assert kn.run_read("k", "t", "m", run=FakeRun(raises=timeout), find=lambda: "tb") is False
     assert kn.run_read("k", "t", "m", run=FakeRun(returncode=2), find=lambda: "tb") is False
-    assert any("exited 2: bozuk" in r.getMessage() for r in caplog.records)
+    assert any("exited 2: broken" in r.getMessage() for r in caplog.records)
 
 
 def test_queue_reading_returns_before_tern_bridge_answers(monkeypatch):

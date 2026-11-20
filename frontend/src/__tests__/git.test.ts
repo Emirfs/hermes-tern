@@ -23,7 +23,7 @@ describe('git status', () => {
         'src/old.ts',
         'u UU N... 100644 100644 100644 100644 f1 f2 f3 src/c.ts',
         '? notes.md',
-        '? ü "q".txt',
+        '? é "q".txt',
         ''
       ].join('\0')
     )
@@ -35,7 +35,7 @@ describe('git status', () => {
       'renamed:src/b.ts<src/old.ts:staged',
       'conflicted:src/c.ts',
       'untracked:notes.md',
-      'untracked:ü "q".txt'
+      'untracked:é "q".txt'
     ])
     expect(parseStatus('# branch.head (detached)\0').branch).toBeUndefined()
   })
@@ -59,22 +59,22 @@ describe('git status', () => {
     g('init', '-q')
     mkdirSync(join(root, 'd', 'sub'), { recursive: true })
     writeFileSync(join(root, 'd', 'sub', 'f.txt'), 'x\ny\n')
-    writeFileSync(join(root, 'ü.txt'), 'a\n')
+    writeFileSync(join(root, 'é.txt'), 'a\n')
     g('add', '-A')
     g('commit', '-qm', 'init')
     g('mv', 'd/sub/f.txt', 'd/f.txt')
     writeFileSync(join(root, 'd', 'f.txt'), 'x\ny\nz\n')
     g('add', '-A')
-    writeFileSync(join(root, 'ü.txt'), 'a\nb\n')
+    writeFileSync(join(root, 'é.txt'), 'a\nb\n')
     writeFileSync(join(root, 'ñew.txt'), '1\n2\n')
 
     const state = await gitState(root)
     const byPath = new Map(state?.files.map(f => [f.path, f]))
 
-    expect([...byPath.keys()].sort()).toEqual(['d/f.txt', 'ñew.txt', 'ü.txt'])
+    expect([...byPath.keys()].sort()).toEqual(['d/f.txt', 'é.txt', 'ñew.txt'])
     expect(byPath.get('d/f.txt')).toMatchObject({ additions: 1, deletions: 0, from: 'd/sub/f.txt', status: 'renamed' })
-    expect(byPath.get('ü.txt')).toMatchObject({ additions: 1, deletions: 0, status: 'modified' })
+    expect(byPath.get('é.txt')).toMatchObject({ additions: 1, deletions: 0, status: 'modified' })
     expect(byPath.get('ñew.txt')).toMatchObject({ additions: 2, status: 'untracked' })
-    expect(await fileDiff(must(state).root, must(byPath.get('ü.txt')))).toContain('+b')
+    expect(await fileDiff(must(state).root, must(byPath.get('é.txt')))).toContain('+b')
   })
 })
