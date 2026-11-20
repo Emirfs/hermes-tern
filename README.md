@@ -41,6 +41,24 @@ Beside the chat (Tern's aside) a device tab shows its box agent's panel, read ev
 `❗ N bekleyen` while requests wait); `/sidebar` takes the edge while open. The panel never sends anything.
 The vault is `HAFIZA_DIR`, else the folder above the `hafiza_mcp.py` script config.yaml runs.
 
+### Models, accounts and fallbacks
+
+| Command | Purpose |
+| --- | --- |
+| `/model`, the model chip | Switches this session's model; in a messaging chat (a device tab, a resumed Telegram topic) it is the chat's own `/model` override, which the chat keeps until `/model reset` (back to its `channel_overrides` entry) |
+| `/login [provider]` | Bare: the **Accounts** sheet, every provider Hermes can sign in to, signed in first (typing filters). Enter (or `/login <provider>`) runs `hermes auth add <provider>` in a split below: Hermes' own OAuth flow or hidden API-key prompt, so no secret passes through the pane |
+| `/logout [provider]` | Bare: the Accounts sheet, Ctrl+D signs out. With a provider: after asking, the gateway's `model.disconnect` removes every credential of it |
+| `/fallback [list\|add\|remove <n>\|clear\|check]` | The profile's fallback chain (`fallback_providers`, tried in order when the primary fails): N adds through the model picker, D removes, X clears (both ask), C runs `hermes fallback check`. Ctrl+B in the model picker adds the selected model too |
+
+The shared gateway's `session.info` names no model for a messaging chat, and `model.options` answers
+config.yaml's default instead of the chat's `channel_overrides` entry or its `/model` pick. So the
+pane asks the plugin's `session.route` (`backend/gateway/routes.py`: the gateway's own resolution,
+session `/model` > `channel_overrides` > config.yaml) after each adopt that left the model unknown and
+after each `session.info` of a messaging chat; the chip and the picker's check mark show what the
+chat's next turn runs. The fallback chain is the profile's: Hermes has no per-chat chain. It is read
+and written with `hermes config get|set fallback_providers` (the gateway picks it up on the next
+turn); a chain whose entry carries a credential reads masked and is not written back from the pane.
+
 ### Tasks and maintenance
 
 | Command | Purpose |
