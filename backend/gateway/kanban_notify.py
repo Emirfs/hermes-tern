@@ -14,6 +14,10 @@ gateway's live Telegram adapter. Nothing is written to ``kanban.db``.
   each delivered message, so a plugin reload or gateway restart continues where it stopped. A board seen
   for the first time starts at its newest event (no history replay). Events older than ``MAX_AGE_S``
   are skipped, and one that keeps failing is dropped after ``MAX_FAILURES`` attempts.
+- Reading tabs: each delivered message is also handed to ``tern-bridge read`` (key ``kanban-<task>-<kind>``,
+  title ``📋 <card title>``, the same text as Markdown on stdin), which opens it as a tab of Tern's
+  ``Okuma`` session. That runs on a daemon thread under ``READ_TIMEOUT_S``; a missing or failing
+  ``tern-bridge`` costs one log line and never holds or fails the Telegram message.
 - Process: the thread starts only where ``gateway.run`` is loaded and works only once the gateway
   runner exists; a reload stops the previous thread (by name) before the new one reads the cursor.
 """
@@ -26,7 +30,9 @@ import json
 import logging
 import os
 import re
+import shutil
 import sqlite3
+import subprocess
 import sys
 import threading
 import time
@@ -51,6 +57,7 @@ MAX_FAILURES = 12
 BATCH = 200
 TITLE_MAX = 120
 DETAIL_MAX = 400
+READ_TIMEOUT_S = 5.0
 
 FAILED_KINDS = {"gave_up": "vazgeçildi", "crashed": "çöktü", "timed_out": "zaman aşımı",
                 "spawn_failed": "başlatılamadı"}
@@ -60,6 +67,8 @@ _LOCAL_PATH_RE = re.compile(r"(?<![\w:/])(?:/(?:Users|home|private|tmp|var|etc|w
                             r"[A-Za-z]:\\[^\s,;]+)")
 
 Deliver = Callable[[str], bool]
+# (key, title, markdown) -> None: hands one reading tab to Tern; returns at once.
+Reader = Callable[[str, str, str], None]
 
 
 # --- files -----------------------------------------------------------------------------------------
@@ -181,8 +190,8 @@ class Notifier:
     """One pass per ``tick``; holds the per-event failure counter between passes."""
 
     def __init__(self, home: Path, deliver: Deliver, sources: Callable[[], Iterable[tuple[str, Path]]] = board_sources,
-                 now: Callable[[], float] = time.time):
-        self.home, self.deliver, self.sources, self.now = home, deliver, sources, now
+                 now: Callable[[], float] = time.time, read: Optional[Reader] = None):
+        self.home, self.deliver, self.sources, self.now, self.read = home, deliver, sources, now, read
         self.failures: dict[tuple[str, int], int] = {}
 
     @property
@@ -230,6 +239,7 @@ class Notifier:
                 if not self._try(text, key):
                     break
                 sent += 1
+                self._reading(row, text)
             elif text:
                 logger.info("kanban-notify: skipped stale event %s on %s", row["id"], slug)
             cursors[slug] = int(row["id"])
@@ -251,6 +261,15 @@ class Notifier:
             self.failures.pop(key, None)
             return True
         return False
+
+    def _reading(self, row: dict[str, Any], text: str) -> None:
+        if self.read is None:
+            return
+        title = _safe(row.get("title") or "(başlıksız)", TITLE_MAX)
+        try:
+            self.read(f"kanban-{row.get('task_id') or '?'}-{row.get('kind')}", f"📋 {title}", reading_markdown(text))
+        except Exception as exc:
+            logger.warning("kanban-notify: reading tab not queued: %s", exc)
 
 
 # --- delivery --------------------------------------------------------------------------------------
@@ -302,6 +321,45 @@ def send_to_topic(text: str, home: Optional[Path] = None) -> bool:
         logger.warning("kanban-notify: Telegram refused: %s", getattr(result, "error", None))
         return False
     return True
+
+
+# --- Tern reading tabs -----------------------------------------------------------------------------
+
+def reading_markdown(text: str) -> str:
+    """A Telegram message as Markdown: each line its own paragraph (Markdown would join them)."""
+    return "\n\n".join(line for line in text.splitlines() if line.strip()) + "\n"
+
+
+def tern_bridge() -> Optional[str]:
+    """The ``tern-bridge`` CLI: on PATH, else where its installer puts it (``~/.local/bin``)."""
+    return shutil.which("tern-bridge") or shutil.which("tern-bridge", path=str(Path.home() / ".local" / "bin"))
+
+
+def run_read(key: str, title: str, markdown: str, *, run: Callable[..., Any] = subprocess.run,
+             find: Callable[[], Optional[str]] = tern_bridge) -> bool:
+    """``tern-bridge read --key KEY --title TITLE --from kanban -`` with ``markdown`` on stdin, on the calling
+    thread under ``READ_TIMEOUT_S``. Any failure is logged once and reported as False."""
+    exe = find()
+    if not exe:
+        logger.info("kanban-notify: tern-bridge not found; reading tab %s skipped", key)
+        return False
+    try:
+        done = run([exe, "read", "--key", key, "--title", title, "--from", "kanban", "-"], input=markdown.encode("utf-8"),
+                   stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=READ_TIMEOUT_S,
+                   creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except Exception as exc:  # a timeout, a missing file, a refused spawn: the tab is optional
+        logger.warning("kanban-notify: tern-bridge read %s failed: %s", key, exc)
+        return False
+    if done.returncode:
+        err = (done.stderr or b"").decode("utf-8", "replace").strip()[:200]
+        logger.warning("kanban-notify: tern-bridge read %s exited %s: %s", key, done.returncode, err)
+        return False
+    return True
+
+
+def queue_reading(key: str, title: str, markdown: str) -> None:
+    """``run_read`` on a daemon thread: the notifier never waits for Tern."""
+    threading.Thread(target=run_read, args=(key, title, markdown), name="hermes-tern:kanban-read", daemon=True).start()
 
 
 # --- the gateway thread ----------------------------------------------------------------------------
@@ -361,7 +419,7 @@ def register(ctx) -> None:
     if not in_gateway_process():
         return
     home = hermes_home()
-    notifier = Notifier(home, lambda text: send_to_topic(text, home))
+    notifier = Notifier(home, lambda text: send_to_topic(text, home), read=queue_reading)
     halt = start_worker(THREAD_NAME, lambda stop: run_loop(stop, notifier.tick, interval=INTERVAL_S,
                                                            label="kanban-notify"))
     on_unload = getattr(ctx, "on_unload", None)

@@ -24,6 +24,7 @@ import { pendingRows } from '../wire/schemas.js'
 
 import type { Automation } from './automation.js'
 import { busyFrom } from './flow.js'
+import type { SessionRoute } from './route.js'
 import type { SessionState } from './state.js'
 import type { SessionTitle } from './title.js'
 
@@ -61,6 +62,7 @@ export interface AdoptHost {
   readonly processes: Pick<Processes, 'poke'>
   readonly prs: Pick<LinkedPrs, 'adopt'>
   readonly queue: { readonly server: Pick<PromptQueue['server'], 'reset'> }
+  readonly route: Pick<SessionRoute, 'adopted'>
   readonly sheets: Pick<PromptSheets, 'dropAll'>
   readonly sidebar: Pick<Sidebar, 'adopt'>
   readonly title: Pick<SessionTitle, 'adopt'>
@@ -129,6 +131,8 @@ export function adoptSteps(host: AdoptHost): readonly Adoptable[] {
         state.usage = r.info?.usage ?? null
       }
     },
+    // A messaging chat's snapshot names no model: its route is read through the plugin (after the info above).
+    { adopt: () => host.route.adopted() },
     // Another session: its own name (or none yet) on the tab.
     { adopt: ({ r }) => host.title.adopt(typeof r.info?.title === 'string' ? r.info.title : undefined) },
     { adopt: () => host.reportCwd() },

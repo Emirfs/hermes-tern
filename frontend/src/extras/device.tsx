@@ -7,6 +7,7 @@
 //     attaches when one opens, and a `session_reset` moves the tab to the new session and says so;
 //   - a status line of the box above the composer: the platform's heartbeat on every read, and a
 //     read-only `field.status` query on a slow interval (never a write to the box);
+//   - the side panel of the box's autonomous agent (extras/devicePanel.tsx), toggled from the status line;
 //   - `/esp`, which opens or focuses Tern's ESP session (a tab per box) through `hermes tern --esp-tabs`.
 
 import { execFile } from 'node:child_process'
@@ -22,6 +23,9 @@ import { answered, type DeviceSession, fieldSession, fieldStatus, type FieldStat
 import type { NoticeEntry } from '../model.js'
 import type { SwitchGate } from '../turn/router.js'
 import type { Requester } from '../wire/rpc.js'
+
+import { agoText } from './ago.js'
+import { DevicePanel } from './devicePanel.js'
 
 /** How often the topic's open session (and the heartbeat) is read. */
 export const SESSION_POLL_MS = 5_000
@@ -43,13 +47,6 @@ export interface DeviceHost {
   changed(): void
 }
 
-/** `3 dk önce`: how long ago `at` was. */
-export function agoText(at: number, now: number): string {
-  const s = Math.max(0, Math.round((now - at) / 1000))
-
-  return s < 45 ? 'az önce' : s < 3600 ? `${Math.max(1, Math.round(s / 60))} dk önce` : s < 86_400 ? `${Math.round(s / 3600)} sa önce` : `${Math.round(s / 86_400)} gün önce`
-}
-
 /** The box's state as the status line says it, from the last status query, else the heartbeat. */
 export function presenceOf(live: FieldStatus | string | undefined, heard: DeviceSession | undefined): 'bilinmiyor' | 'çevrimdışı' | 'çevrimiçi' {
   if (live && typeof live !== 'string') {
@@ -62,6 +59,8 @@ export function presenceOf(live: FieldStatus | string | undefined, heard: Device
 /** A device tab's follower and status line. */
 export class DeviceLive {
   readonly #host: DeviceHost
+  /** The agent's side panel: its own reads, drawn in Tern's aside. */
+  readonly panel: DevicePanel
   readonly #timers = new Disposables()
   /** The topic session this tab opened last (the launcher's, then each one it followed to). */
   #current: string | null
@@ -76,6 +75,7 @@ export class DeviceLive {
   constructor(host: DeviceHost, initial: string) {
     this.#host = host
     this.#current = initial || null
+    this.panel = new DevicePanel(host)
     this.#timers.timeout(() => this.#loop(), FIRST_POLL_MS)
     this.#timers.timeout(() => this.#statusLoop(), FIRST_POLL_MS)
   }
@@ -87,6 +87,7 @@ export class DeviceLive {
 
   dispose() {
     this.#timers.dispose()
+    this.panel.dispose()
   }
 
   #loop() {
@@ -175,8 +176,8 @@ export class DeviceLive {
     }
   }
 
-  /** The status line above the composer. */
-  node(now = Date.now()): JSX.Element {
+  /** The status line above the composer; with Tern's aside, its `panel` segment shows or hides the side panel. */
+  node(now = Date.now(), aside = false): JSX.Element {
     const d = this.#host.device
     const live = this.#status
     const state = presenceOf(live, this.#session)
@@ -187,6 +188,8 @@ export class DeviceLive {
       : this.#session && !this.#session.sessionId
         ? 'Telegram oturumu bekleniyor'
         : `Telegram #${d.threadId || '?'} · canlı`
+    const pending = this.panel.pending
+    const panelText = pending ? `❗ ${pending} bekleyen` : aside ? (this.panel.open ? 'panel ▸' : 'panel ◂') : ''
 
     return (
       <status key="device" role="hermes.statusline">
@@ -199,6 +202,17 @@ export class DeviceLive {
         />
         {seenAt ? <seg key="seen" priority={6} spans={[{ t: `son görülme ${agoText(seenAt, now)}` }]} /> : null}
         {detail ? <seg key="detail" priority={2} spans={[{ t: detail }]} title={detail} /> : null}
+        {panelText ? (
+          <seg
+            key="panel"
+            {...(aside ? { onClick: () => this.panel.toggle() } : {})}
+            priority={pending ? 9 : 5}
+            role={pending ? 'hermes.statusline.ask' : 'hermes.statusline.panel'}
+            side="right"
+            spans={[{ t: panelText }]}
+            title={aside ? (this.panel.open ? 'Cihaz panelini gizle' : 'Cihaz panelini göster') : 'Senden beklenenler: ajanın açık yardım istekleri'}
+          />
+        ) : null}
         <seg key="topic" priority={7} side="right" spans={[{ t: topic }]} title={this.#session?.sessionKey ?? d.sessionKey} />
       </status>
     )

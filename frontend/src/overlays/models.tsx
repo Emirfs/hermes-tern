@@ -3,7 +3,8 @@
 // scope column, facts, a preview pane, the current model checked), switching
 // the session's model with the gateway's `model` mutation as Ink's and Desktop's pickers do. It
 // switches this session only. The effort strip picks the reasoning effort to go with it (Ctrl+E
-// steps it) and, for a model with a fast tier, Fast (Ctrl+F).
+// steps it) and, for a model with a fast tier, Fast (Ctrl+F). Ctrl+B adds the selected model to the
+// profile's fallback chain (hermes/fallback.ts); `/fallback add` opens it in that mode only.
 
 import type { ConfigSetResult, ModelOptionProvider } from '@hermes/shared/gateway-events'
 import { modelSearchText } from '@hermes/shared/model-search-text'
@@ -12,6 +13,7 @@ import type { JSX, Key, KvItem, PickerColumn, PickerGroup, PickerItem, PickerSco
 import type { ChatPorts } from '../app/ports.js'
 import { optional } from '../core/assert.js'
 import { errorText } from '../core/errors.js'
+import { addFallback, entryLabel } from '../hermes/fallback.js'
 import { modelPayload, mutateSession } from '../hermes/mutate.js'
 import { providerDisplayNames } from '../hermes/providers.js'
 import { rememberCaps } from '../modelCaps.js'
@@ -97,13 +99,21 @@ export function pickerValue(model: string, provider: string): string {
   return `${model} --provider ${provider} --session`
 }
 
+/**
+ * What Enter does with a row: switch this session's model (the default; Ctrl+B adds the row to the
+ * fallback chain instead), or, for `/fallback add`, add it to the chain and call `added`.
+ */
+export type PickerMode = { kind: 'switch' } | { kind: 'fallback'; added(): void }
+
 /** Opens the model picker over the session. */
-export function openModelPicker(host: ModelsHost) {
+export function openModelPicker(host: ModelsHost, mode: PickerMode = { kind: 'switch' }) {
   let state: 'loading' | 'ready' | 'error' = 'loading'
   let message = ''
   let rows: Row[] = []
   let providers: { provider: ModelOptionProvider; name: string }[] = []
   let current = ''
+  /** The provider the session runs: its info's (a messaging chat's route, session/route.ts), else model.options'. */
+  let currentProvider = ''
   let query = ''
   let scope = ALL
   let selected: string | undefined
@@ -137,10 +147,14 @@ export function openModelPicker(host: ModelsHost) {
           providerName: name
         }))
       )
-      const currentProvider = list.find(p => p.is_current)?.slug ?? r.provider ?? ''
+      // session.info names the route the session runs; model.options answers config.yaml's default for a
+      // messaging chat, whose channel_overrides entry or /model pick it does not apply.
+      const info = host.session.info
+      const currentModel = info?.model || r.model
+      currentProvider = info?.provider || list.find(p => p.is_current)?.slug || r.provider || ''
       current =
-        rows.find(row => row.model === r.model && row.provider.slug === currentProvider)?.id ??
-        rows.find(row => row.model === r.model)?.id ??
+        rows.find(row => row.model === currentModel && row.provider.slug === currentProvider)?.id ??
+        rows.find(row => row.model === currentModel)?.id ??
         ''
       selected = current || rows[0]?.id
       state = 'ready'
@@ -152,6 +166,15 @@ export function openModelPicker(host: ModelsHost) {
     host.changed()
   }
 
+  /** Appends `row` to the fallback chain (config.yaml's fallback_providers). */
+  const addAsFallback = async (row: Row) => {
+    const added = await addFallback(host, row.provider.slug, row.model)
+    host.transcript.notice(
+      added ? `Added fallback: ${entryLabel({ model: row.model, provider: row.provider.slug })}.` : `${row.model} is already in the fallback chain.`,
+      added ? 'success' : 'info'
+    )
+  }
+
   const choose = async (id: string | undefined, confirmed = false) => {
     const row = rows.find(r => r.id === id)
 
@@ -160,6 +183,22 @@ export function openModelPicker(host: ModelsHost) {
     }
 
     busy = true
+
+    if (mode.kind === 'fallback') {
+      try {
+        await addAsFallback(row)
+        host.close(overlay)
+        mode.added()
+      } catch (error) {
+        host.transcript.notice(errorText(error), 'error')
+        host.close(overlay)
+      }
+
+      busy = false
+      host.changed()
+
+      return
+    }
 
     try {
       const r = await switchModel(host, pickerValue(row.model, row.provider.slug), confirmed)
@@ -188,6 +227,26 @@ export function openModelPicker(host: ModelsHost) {
     host.changed()
   }
 
+  /** Ctrl+B in the switch picker: the selected row joins the fallback chain; the picker stays. */
+  const fallbackSelected = async () => {
+    const row = rows.find(r => r.id === selected)
+
+    if (!row || busy) {
+      return
+    }
+
+    busy = true
+
+    try {
+      await addAsFallback(row)
+    } catch (error) {
+      host.transcript.notice(errorText(error), 'error')
+    }
+
+    busy = false
+    host.changed()
+  }
+
   const view = () => {
     const inScope = scope === ALL ? rows : rows.filter(r => `provider:${r.provider.slug}` === scope)
     const ranked = rank(inScope, query, r => `${modelSearchText(r.model)} ${r.providerName} ${r.provider.slug}`)
@@ -196,7 +255,7 @@ export function openModelPicker(host: ModelsHost) {
 
     // The current provider's group leads, then the backend's order.
     const groups = [...providers].sort(
-      (a, b) => Number(Boolean(b.provider.is_current)) - Number(Boolean(a.provider.is_current))
+      (a, b) => Number(b.provider.slug === currentProvider) - Number(a.provider.slug === currentProvider)
     )
 
     for (const { provider, name } of groups) {
@@ -254,9 +313,10 @@ export function openModelPicker(host: ModelsHost) {
       return (
         <picker
           actions={[
-            ...(row && fastable(row) ? [{ id: 'fast', keys: ['ctrl+f'], label: '⚡ Fast', on: fast }] : []),
+            ...(mode.kind === 'switch' && row && fastable(row) ? [{ id: 'fast', keys: ['ctrl+f'], label: '⚡ Fast', on: fast }] : []),
+            ...(mode.kind === 'switch' ? [{ id: 'fallback', keys: ['ctrl+b'], label: 'Add as fallback' }] : []),
             { end: true, id: 'close', keys: ['esc'], label: 'Close' },
-            { id: 'use', keys: ['enter'], label: 'Switch', primary: true }
+            { id: 'use', keys: ['enter'], label: mode.kind === 'fallback' ? 'Add to the chain' : 'Switch', primary: true }
           ]}
           columns={columns}
           key={KEY}
@@ -280,6 +340,7 @@ export function openModelPicker(host: ModelsHost) {
             },
             close: () => host.close(overlay),
             confirm: () => void choose(confirm?.row.id, true),
+            fallback: () => void fallbackSelected(),
             fast: () => {
               fast = !fast
               fastTouched = true
@@ -311,7 +372,7 @@ export function openModelPicker(host: ModelsHost) {
           {...optional('selected', selected)}
           size="lg"
           state={state}
-          {...(levels.length
+          {...(levels.length && mode.kind === 'switch'
             ? {
                 strip: {
                   items: levels.map(l => ({ id: l.id, label: l.label, on: l.id === effort })),
@@ -320,7 +381,7 @@ export function openModelPicker(host: ModelsHost) {
                 }
               }
             : {})}
-          title="Models"
+          title={mode.kind === 'fallback' ? 'Add a fallback model' : 'Models'}
           total={rows.length}
         >
           {row ? preview(row, row.id === current) : null}
@@ -366,6 +427,12 @@ export function openModelPicker(host: ModelsHost) {
           fast = !fast
           fastTouched = true
         }
+
+        return true
+      }
+
+      if (k.ctrl && k.name === 'b' && mode.kind === 'switch') {
+        void fallbackSelected()
 
         return true
       }

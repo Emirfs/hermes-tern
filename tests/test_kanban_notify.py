@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -192,3 +193,82 @@ def test_register_outside_the_gateway_starts_nothing(monkeypatch):
     before = {t.name for t in threading.enumerate()}
     kn.register(object())
     assert kn.THREAD_NAME not in {t.name for t in threading.enumerate()} - before
+
+
+# --- Tern reading tabs (tern-bridge read): fake runners only, no job is ever enqueued ---
+
+def test_each_delivered_message_also_queues_a_reading_tab(home, board):
+    sent, tabs, up = [], [], {"ok": True}
+
+    def deliver(text):
+        if up["ok"]:
+            sent.append(text)
+        return up["ok"]
+
+    n = kn.Notifier(home, deliver, sources=lambda: [("default", board.path)], read=lambda *tab: tabs.append(tab))
+    n.tick()
+    board.add("claimed")
+    board.add("heartbeat")
+    board.add("completed", {"summary": "rapor hazır"})
+    assert n.tick() == 2
+    assert [(key, title) for key, title, _ in tabs] == [("kanban-t1-claimed", "📋 İlk iş"), ("kanban-t1-completed", "📋 İlk iş")]
+    assert tabs[1][2] == "✅ Tamamlandı: t1 — İlk iş\n\nrapor hazır\n" and sent[1] == "✅ Tamamlandı: t1 — İlk iş\nrapor hazır"
+    up["ok"] = False
+    board.add("blocked", {"reason": "girdi lazım"})
+    assert n.tick() == 0 and len(tabs) == 2  # nothing delivered, no tab
+
+
+def test_a_failing_reader_never_holds_the_telegram_message(home, board):
+    sent = []
+
+    def broken(*_):
+        raise RuntimeError("tern-bridge yok")
+
+    n = kn.Notifier(home, lambda t: sent.append(t) or True, sources=lambda: [("default", board.path)], read=broken)
+    n.tick()
+    board.add("claimed")
+    board.add("completed")
+    assert n.tick() == 2 and len(sent) == 2
+    assert n.tick() == 0  # the cursor moved on: nothing is resent
+
+
+class FakeRun:
+    def __init__(self, returncode=0, raises=None):
+        self.calls, self.returncode, self.raises = [], returncode, raises
+
+    def __call__(self, argv, **kw):
+        self.calls.append((argv, kw))
+        if self.raises:
+            raise self.raises
+        return subprocess.CompletedProcess(argv, self.returncode, b"", b"bozuk")
+
+
+def test_run_read_hands_the_markdown_to_tern_bridge_read_on_stdin():
+    run = FakeRun()
+    assert kn.run_read("kanban-t1-claimed", "📋 İlk iş", "▶️ Başladı\n", run=run, find=lambda: "C:/bin/tern-bridge.cmd")
+    (argv, kw), = run.calls
+    assert argv == ["C:/bin/tern-bridge.cmd", "read", "--key", "kanban-t1-claimed", "--title", "📋 İlk iş",
+                    "--from", "kanban", "-"]
+    assert kw["input"] == "▶️ Başladı\n".encode("utf-8") and kw["timeout"] == kn.READ_TIMEOUT_S
+
+
+def test_run_read_swallows_a_missing_cli_a_timeout_and_a_failed_exit(caplog):
+    run = FakeRun()
+    assert kn.run_read("k", "t", "m", run=run, find=lambda: None) is False and run.calls == []
+    timeout = subprocess.TimeoutExpired(["tern-bridge"], kn.READ_TIMEOUT_S)
+    assert kn.run_read("k", "t", "m", run=FakeRun(raises=timeout), find=lambda: "tb") is False
+    assert kn.run_read("k", "t", "m", run=FakeRun(returncode=2), find=lambda: "tb") is False
+    assert any("exited 2: bozuk" in r.getMessage() for r in caplog.records)
+
+
+def test_queue_reading_returns_before_tern_bridge_answers(monkeypatch):
+    release, called = threading.Event(), threading.Event()
+
+    def slow(*tab):
+        called.set()
+        release.wait(5)
+
+    monkeypatch.setattr(kn, "run_read", slow)
+    kn.queue_reading("k", "t", "m")
+    assert called.wait(2)  # it runs, on its own thread, while this one goes on
+    release.set()

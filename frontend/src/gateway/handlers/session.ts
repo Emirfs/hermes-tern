@@ -8,6 +8,7 @@ import type { Theme } from '../../chrome/theme.js'
 import type { LiveSessionId } from '../../core/ids.js'
 import type { Automation } from '../../session/automation.js'
 import type { SessionLifecycle } from '../../session/lifecycle.js'
+import type { SessionRoute } from '../../session/route.js'
 import type { SessionState } from '../../session/state.js'
 import type { SessionTitle } from '../../session/title.js'
 import type { Compactions } from '../../transcript/compactions.js'
@@ -22,6 +23,7 @@ export interface SessionCx {
   /** The shown session's runtime id: null before the first session and while the gateway is down. */
   sid(): LiveSessionId | null
   readonly session: Pick<SessionState, 'info' | 'usage'>
+  readonly route: Pick<SessionRoute, 'infoChanged'>
   readonly life: Pick<SessionLifecycle, 'fellBehind' | 'ready' | 'routeEvent'>
   readonly reconnect: Pick<Reconnect, 'ready' | 'redialing'>
   readonly theme: Pick<Theme, 'skin'>
@@ -61,6 +63,8 @@ export const sessionHandlers = {
     const cwd = session.info?.cwd
     // The shared owner's idle fanout carries only pending/revision/generation: merge, never replace.
     session.info = ev.payload ? { ...session.info, ...ev.payload } : session.info
+    // A messaging chat's info names no model: its route is read again (a pick may have moved it).
+    cx.route.infoChanged(ev.payload?.model)
     session.usage = ev.payload?.usage ?? session.usage
     transcript.compactions.contextUsed(session.usage?.context_used ?? 0)
 

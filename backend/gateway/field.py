@@ -13,6 +13,12 @@
   box's Telegram DM topic (the newest row of that chat and thread in state.db without ``ended_at``), which a
   device tab (``hermes tern --device``) shows and follows. ``rotated``: the topic moved on from ``current`` (a
   ``session_reset``), not merely compressed it. state.db is opened read-only.
+- ``plugin.hermes-tern.field.agent`` ``{"device"}`` answers ``{"device", "mission", "help_requests", "decisions",
+  "reports", "facts", "errors"}``: what the box's autonomous agent left for the device tab's side panel, read
+  from files only: its mission (``missions/<id>.md``), its journal (``private/agents/<id>/journal.jsonl``: open
+  help requests, the newest decisions, the newest reports and wakes) and the protocol map of its memory-vault
+  note (``devices/<id>.md``, through the vault's ``.tools/device_notes.py``). It never writes, and a missing
+  file reads as empty.
 
 The box code is the user's field-ai-box checkout, read through ``shared/field_boxes.py``: its ``host/`` folder is
 the one config.yaml's ``mcp_servers.field_ai.args`` names, and its modules are imported from there. Only the commands in ``READS``
@@ -23,7 +29,10 @@ torque, limits or poses, tasks, firmware pushes or provisioning.
 from __future__ import annotations
 
 import asyncio
+import importlib.util
+import json
 import logging
+import os
 import re
 import sys
 import threading
@@ -41,6 +50,7 @@ logger = logging.getLogger(__name__)
 DEVICES_METHOD = "field.devices"
 STATUS_METHOD = "field.status"
 SESSION_METHOD = "field.session"
+AGENT_METHOD = "field.agent"
 PLATFORM = "fieldai"
 # The only box commands this module sends: (what the answer is filed under, the command). All read state.
 READS = (("esp", "STATUS"), ("stm32", "STM STATUS"), ("rf", "STM RF STATUS"))
@@ -57,6 +67,18 @@ _pool_lock = threading.RLock()
 _pool: Optional[ThreadPoolExecutor] = None
 # (Host folder, transport, device) -> query in flight, never shared across profiles' registries.
 _inflight: dict[tuple[str, str, str], Future] = {}
+
+# The device agent's panel (field.agent): how many of each the journal read keeps, newest first.
+DECISIONS_KEPT = 20
+REPORTS_KEPT = 30
+# Characters of a mission file the panel shows; of an entry's title and body (the journal's own limits).
+MISSION_CHARS = 20_000
+TITLE_CHARS = 120
+BODY_CHARS = 2_000
+# The journal kinds the panel shows as work done.
+REPORT_KINDS = ("report", "wake")
+# device_notes.py as last imported: (path, mtime) -> module, so an edit of it is picked up without a reload.
+_notes_module: dict[tuple[str, float], Any] = {}
 
 
 def _executor() -> ThreadPoolExecutor:
@@ -223,7 +245,130 @@ def session(params: dict, **_: Any) -> dict[str, Any]:
     return {**topic_session(home, box, current or None), **heard(_adapter(home), dev)}
 
 
+def vault_dir(config: dict[str, Any]) -> Optional[Path]:
+    """The memory vault: ``HAFIZA_DIR``, else the folder above the ``hafiza_mcp.py`` script config.yaml runs (as that
+    server finds its own vault)."""
+    env = os.environ.get("HAFIZA_DIR")
+    if env:
+        return Path(env)
+    servers = config.get("mcp_servers")
+    for server in servers.values() if isinstance(servers, dict) else ():
+        args = server.get("args") if isinstance(server, dict) else None
+        for arg in args if isinstance(args, list) else ():
+            if isinstance(arg, str) and Path(arg).name == "hafiza_mcp.py":
+                return Path(arg).parent.parent
+    return None
+
+
+def _entry(raw: dict[str, Any]) -> dict[str, Any]:
+    """One journal entry as the panel reads it: the common fields, clipped, and a wake's reason and trigger."""
+    ts = raw.get("ts")
+    out: dict[str, Any] = {"id": str(raw.get("id") or ""), "ts": float(ts) if isinstance(ts, (int, float)) else None,
+                           "kind": raw["kind"], "title": str(raw.get("title") or "")[:TITLE_CHARS],
+                           "body": str(raw.get("body") or "")[:BODY_CHARS], "evidence": str(raw.get("evidence") or "")}
+    for key in ("reason", "trigger"):
+        if isinstance(raw.get(key), str):
+            out[key] = raw[key]
+    return out
+
+
+def read_journal(path: Path, dev: str) -> dict[str, list[dict[str, Any]]]:
+    """The panel's part of one journal: open help requests, the newest decisions, the newest reports and wakes, each
+    newest first. A help request is open until a later ``help_done`` names it; lines that are not JSON objects,
+    other devices' entries and unknown kinds are skipped. A missing file is an empty journal."""
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except FileNotFoundError:
+        lines = []
+    entries: list[dict[str, Any]] = []
+    for line in lines:
+        try:
+            raw = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(raw, dict) and isinstance(raw.get("kind"), str) and raw.get("device", dev) == dev:
+            entries.append(raw)
+    requests: dict[str, dict[str, Any]] = {}
+    decisions, reports = [], []
+    for raw in entries:
+        kind = raw["kind"]
+        if kind == "help_request":
+            requests[str(raw.get("id") or f"#{len(requests)}")] = _entry(raw)
+        elif kind == "help_done":
+            requests.pop(str(raw.get("ref") or ""), None)
+        elif kind == "decision":
+            decisions.append(_entry(raw))
+        elif kind in REPORT_KINDS:
+            reports.append(_entry(raw))
+
+    def newest(rows: list[dict[str, Any]], keep: Optional[int] = None) -> list[dict[str, Any]]:
+        # File order is append order: it breaks a tie (or a missing ts) towards the later line.
+        ordered = [r for _, r in sorted(enumerate(rows), key=lambda p: (p[1]["ts"] or 0.0, p[0]), reverse=True)]
+        return ordered[:keep] if keep is not None else ordered
+
+    return {"help_requests": newest(list(requests.values())), "decisions": newest(decisions, DECISIONS_KEPT),
+            "reports": newest(reports, REPORTS_KEPT)}
+
+
+def _device_notes(vault: Path) -> Any:
+    """The vault's ``device_notes`` module, imported by path (re-imported when the file changes)."""
+    path = vault / ".tools" / "device_notes.py"
+    key = (str(path), path.stat().st_mtime)
+    module = _notes_module.get(key)
+    if module is None:
+        spec = importlib.util.spec_from_file_location("hermes_tern_device_notes", path)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"{path} is not importable")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _notes_module.clear()
+        _notes_module[key] = module
+    return module
+
+
+def read_facts(vault: Optional[Path], dev: str) -> list[dict[str, str]]:
+    """The protocol map of ``dev``'s vault note; empty while the note (or the vault's library) does not exist. The
+    library is only asked when the note exists, so a read never creates one."""
+    if vault is None or not (vault / "devices" / f"{dev}.md").is_file() or not (vault / ".tools" / "device_notes.py").is_file():
+        return []
+    facts = _device_notes(vault).read_device(vault, dev).get("facts")
+    keys = ("field", "meaning", "status", "evidence", "updated")
+    return [{k: str(f.get(k) or "") for k in keys} for f in facts if isinstance(f, dict)] if isinstance(facts, list) else []
+
+
+def agent(params: dict, **_: Any) -> dict[str, Any]:
+    dev = params.get("device")
+    if not isinstance(dev, str) or not _DEVICE_ID.match(dev):
+        raise ValueError("field.agent needs the device id of a provisioned box")
+    config = messaging.read_config(messaging.hermes_home())
+    host = host_dir(config)
+    if host is None:
+        raise ValueError("config.yaml has no mcp_servers.field_ai server script; the field-ai-box host folder is unknown")
+    known = registry(host)
+    if dev not in known:
+        raise ValueError(f"unknown device {dev}; provisioned: {', '.join(known) or 'none'}")
+    repo = host.parent
+    errors: dict[str, str] = {}
+    try:
+        mission = (repo / "missions" / f"{dev}.md").read_text(encoding="utf-8", errors="replace")[:MISSION_CHARS]
+    except FileNotFoundError:
+        mission = ""
+    try:
+        journal = read_journal(repo / "private" / "agents" / dev / "journal.jsonl", dev)
+    except OSError as exc:
+        errors["journal"] = str(exc)
+        journal = {"help_requests": [], "decisions": [], "reports": []}
+    try:
+        facts = read_facts(vault_dir(config), dev)
+    except Exception as exc:  # the vault library is another project's code: its failure leaves the map empty
+        logger.warning("field.agent: device notes of %s unreadable: %s", dev, exc)
+        errors["facts"] = f"{type(exc).__name__}: {exc}"
+        facts = []
+    return {"device": dev, "mission": mission, **journal, "facts": facts, "errors": errors}
+
+
 def register(ctx) -> None:
     ctx.register_rpc(DEVICES_METHOD, devices)
     ctx.register_rpc(STATUS_METHOD, status)
     ctx.register_rpc(SESSION_METHOD, session)
+    ctx.register_rpc(AGENT_METHOD, agent)

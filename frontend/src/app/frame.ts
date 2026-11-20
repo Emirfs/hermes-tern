@@ -26,8 +26,8 @@ export interface FrameCx extends DockSources {
   readonly transcript: Pick<Transcript, 'currentTodos' | 'entries'>
   readonly sidebar: Pick<Sidebar, 'node'>
   readonly pet?: Pick<Pet, 'view'>
-  /** A device tab's box status line (extras/device.tsx), above the dock's own rows. */
-  readonly device?: Pick<DeviceLive, 'node'> | undefined
+  /** A device tab's box status line and its agent's side panel (extras/device.tsx), above the dock's own rows. */
+  readonly device?: Pick<DeviceLive, 'node' | 'panel'> | undefined
   /** Tern has the aside feature: the session sidebar docks at the right edge. */
   aside(): boolean
   /** The dock's buttons, bound once. */
@@ -56,9 +56,10 @@ export function drawFrame(cx: FrameCx, now = Date.now()) {
   }
 
   cx.surface.render({
-    dock: [...(cx.pet?.view ? [petNode(cx.pet.view)] : []), ...(cx.device ? [cx.device.node(now)] : []), ...dockNodes(dockModel(cx, now), cx.actions)],
+    dock: [...(cx.pet?.view ? [petNode(cx.pet.view)] : []), ...(cx.device ? [cx.device.node(now, cx.aside())] : []), ...dockNodes(dockModel(cx, now), cx.actions)],
     layer: [
-      ...(cx.aside() ? [cx.sidebar.node('layer.sidebar')].filter(n => n !== null) : []),
+      // One sheet docks at the edge at a time: the session sidebar, while open, takes the device panel's place.
+      ...(cx.aside() ? [cx.sidebar.node('layer.sidebar') ?? cx.device?.panel.node(now) ?? null].filter(n => n !== null) : []),
       ...cx.overlays.map(o => o.node(`layer.${o.key}`)),
       ...(modal ? [] : cx.completion.nodes(COMPOSER_ID))
     ],

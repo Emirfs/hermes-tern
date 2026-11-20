@@ -1,12 +1,18 @@
 // Messaging in the native pane: platform health, confirmed sends and pairing, the inbox and session handoff.
 
+import { homedir } from 'node:os'
+
 import type { CommandHost, LocalCommand } from '../commands/local.js'
+import { dataDir } from '../config/dataDir.js'
+import { launchEnv } from '../config/env.js'
 import { errorText } from '../core/errors.js'
 import { parsePairing, pairingArgv, parseSend, sendArgv, sendConfirmText, sendTargets, type SendTarget } from '../messaging/cli.js'
 import { handOff, handoffPlatform, HANDOFF_USAGE } from '../messaging/handoff.js'
+import { bridgeCommand, handoffMarkdown, handoffPrompt, OMP_USAGE, ompArgs, startOmp, writeHandoff } from '../messaging/ompHandoff.js'
 import { openInbox, openPlatforms, openSendTarget } from '../overlays/inbox.js'
 import { confirmOverlay } from '../overlays/prompts.js'
 import { reportError } from '../overlays/sheet.js'
+import { historyText } from '../transcript/historyText.js'
 
 import { argWords, hermesExec } from './cli.js'
 
@@ -53,9 +59,31 @@ async function pairing(host: CommandHost, arg: string) {
   }))
 }
 
+/** `/handoff omp …`: the conversation to an omp agent in a new Tern tab (messaging/ompHandoff.ts). */
+async function handoffToOmp(host: CommandHost, cwd: string | undefined, note: string) {
+  const command = bridgeCommand(process.env, process.platform)
+  if (!command) { host.transcript.notice('tern-bridge was not found on PATH (hermes-bridge\'s cli\\install.cmd installs it).', 'warning'); return }
+  const launch = launchEnv()
+  const session = host.session.ref.stored ?? host.session.ref.live ?? ''
+  const at = new Date()
+  const handoff = {
+    device: launch.device, history: historyText(host.transcript.entries, '1500'), model: host.session.info?.model ?? '',
+    note, session, title: typeof host.session.info?.title === 'string' ? host.session.info.title : ''
+  }
+  const file = await writeHandoff(dataDir(), handoffMarkdown(handoff, at), at)
+  const folder = cwd || host.session.info?.cwd || launch.cwd || homedir()
+  host.transcript.notice(`Handing this conversation to omp in ${folder}…`); host.changed()
+  const r = await startOmp(command, folder, handoffPrompt(file, handoff))
+  host.transcript.notice(r.ok ? `omp took over in a new tab. Context: ${file}` : `The omp handoff failed: ${r.output || 'no output'}. Context: ${file}`, r.ok ? 'success' : 'error')
+  host.changed()
+}
+
 async function handoff(host: CommandHost, arg: string) {
+  const omp = ompArgs(argWords(arg))
+  if (omp) { await handoffToOmp(host, omp.cwd, omp.note); return }
+  if (/^omp\b/i.test(arg.trim())) { host.transcript.notice(OMP_USAGE, 'warning'); return }
   const platform = handoffPlatform(arg)
-  if (!platform) { host.transcript.notice(HANDOFF_USAGE, 'warning'); return }
+  if (!platform) { host.transcript.notice(`${HANDOFF_USAGE} ${OMP_USAGE}`, 'warning'); return }
   if (host.busy) { host.transcript.notice('Wait for the current turn to finish before handing it off.', 'warning'); return }
   const sid = host.session.ref.live
   if (!sid) { host.transcript.notice('No current session to hand off.', 'warning'); return }
@@ -85,5 +113,5 @@ export const MESSAGING_COMMANDS: readonly LocalCommand[] = [
     openInbox(host)
   }) },
   { name: 'pairing', help: '[list|approve <platform> <code>|revoke <platform> <user-id>] — approve/revoke ask first', run: guarded(pairing) },
-  { name: 'handoff', help: '<platform> — continue this session in its messaging home channel (asks first)', run: guarded(handoff) }
+  { name: 'handoff', help: '<platform> | omp [--cwd DIR] [ask] — continue in a messaging home channel, or hand the conversation to an omp agent tab (asks first for a platform)', run: guarded(handoff) }
 ]

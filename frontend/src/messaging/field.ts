@@ -1,7 +1,8 @@
 // The field AI boxes (ESP32-S3 + STM32) the /field sheet lists, from the plugin
 // (backend/gateway/field.py): `field.devices` (the registry, each box's Telegram topic, and what the
 // gateway's `fieldai` platform last heard from it) and `field.status` (one read-only status query of a
-// box: ESP status, STM32 status, RF status). Nothing here can write to a box.
+// box: ESP status, STM32 status, RF status), `field.session` (a device tab's topic session) and
+// `field.agent` (the box agent's mission, journal and protocol map, from files). Nothing here can write to a box.
 
 import * as z from 'zod/mini'
 
@@ -11,6 +12,7 @@ import { loose } from '../wire/schemas.js'
 export const DEVICES_METHOD = 'plugin.hermes-tern.field.devices'
 export const STATUS_METHOD = 'plugin.hermes-tern.field.status'
 export const SESSION_METHOD = 'plugin.hermes-tern.field.session'
+export const AGENT_METHOD = 'plugin.hermes-tern.field.agent'
 /** The skill a box's conversation runs with (the Telegram DM topics use it too). */
 export const FIELD_SKILL = 'field-device-chat'
 
@@ -184,6 +186,93 @@ export async function fieldSession(gw: Requester, device: string, current: strin
 
   if (!r) {
     throw new Error('field.session answered in an unknown shape (is the hermes-tern plugin in the gateway current?)')
+  }
+
+  return r
+}
+
+/** One journal entry of a box's agent, as the side panel reads it. */
+export interface AgentEntry {
+  id: string
+  /** Epoch ms; null when the entry has none. */
+  at: number | null
+  kind: string
+  title: string
+  body: string
+  evidence: string
+  /** A wake's reason. */
+  reason: string | null
+}
+
+/** One row of the box's protocol map (its memory-vault note). */
+export interface AgentFact {
+  field: string
+  meaning: string
+  /** `verified`, `candidate` or `rejected`. */
+  status: string
+  evidence: string
+  updated: string
+}
+
+/** What `field.agent` says of a box's autonomous agent: its mission, what it waits on, did and found. */
+export interface DeviceAgent {
+  /** The mission file's Markdown; empty when there is none. */
+  mission: string
+  /** Open help requests, newest first. */
+  helpRequests: AgentEntry[]
+  /** The newest decisions, newest first. */
+  decisions: AgentEntry[]
+  /** The newest reports and wakes, newest first. */
+  reports: AgentEntry[]
+  facts: AgentFact[]
+  /** A part that could not be read, by name (`journal`, `facts`). */
+  errors: Record<string, string>
+}
+
+const text = z.catch(z.string(), '')
+const agentEntry = z.object({ body: text, evidence: text, id: text, kind: text, reason: str, title: text, ts: num })
+const agentFact = z.object({ evidence: text, field: z.string(), meaning: text, status: text, updated: text })
+
+const agentResult = z.object({
+  decisions: z.catch(z.array(agentEntry), []),
+  errors: z.catch(z.record(z.string(), z.string()), {}),
+  facts: z.catch(z.array(agentFact), []),
+  help_requests: z.catch(z.array(agentEntry), []),
+  mission: text,
+  reports: z.catch(z.array(agentEntry), [])
+})
+
+const entryOf = (e: z.infer<typeof agentEntry>): AgentEntry => ({
+  at: e.ts ? Math.round(e.ts * 1000) : null,
+  body: e.body,
+  evidence: e.evidence,
+  id: e.id,
+  kind: e.kind,
+  reason: e.reason ?? null,
+  title: e.title
+})
+
+export function readAgent(raw: unknown): DeviceAgent | undefined {
+  const r = agentResult.safeParse(raw)
+
+  return r.success
+    ? {
+        decisions: r.data.decisions.map(entryOf),
+        errors: r.data.errors,
+        facts: r.data.facts,
+        helpRequests: r.data.help_requests.map(entryOf),
+        mission: r.data.mission,
+        reports: r.data.reports.map(entryOf)
+      }
+    : undefined
+}
+
+/** `field.agent`: box `device`'s mission, journal and protocol map (files only, never the box). */
+export async function fieldAgent(gw: Requester, device: string): Promise<DeviceAgent> {
+  const r = readAgent(await gw.request<unknown>(AGENT_METHOD, { device }))
+
+  if (!r) {
+    throw new Error('field.agent answered in an unknown shape (is the hermes-tern plugin in the gateway current?)')
   }
 
   return r
