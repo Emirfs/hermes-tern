@@ -7,7 +7,6 @@ import type { ChatPorts } from '../app/ports.js'
 import { copyToClipboard } from '../clipboard.js'
 import { storedSessionId } from '../core/ids.js'
 import { EXTRA_COMMANDS } from '../extras/index.js'
-import type { Entry } from '../model.js'
 import { type AgentsSheetHost, openAgents } from '../overlays/agents.js'
 import { type BackgroundHost, openBackground } from '../overlays/background.js'
 import { type ChangesHost, openChanges } from '../overlays/changes.js'
@@ -18,6 +17,7 @@ import { openSessionPicker, type SessionsHost } from '../overlays/sessions.js'
 import { isThemeMode, openThemePicker, type ThemeHost } from '../overlays/theme.js'
 import { LEVELS } from '../session/effort.js'
 import { fastCommand, type FastHost } from '../session/fast.js'
+import { historyText } from '../transcript/historyText.js'
 import { answerText } from '../transcript/turns.js'
 import { rpc } from '../wire/rpc.js'
 
@@ -296,27 +296,6 @@ function copyAnswer(host: CommandHost, arg: string) {
 
   copyToClipboard(text)
   host.transcript.notice(`Copied ${n === undefined ? 'the last answer' : `answer ${at}`} (${text.length} characters).`)
-}
-
-/** `/history [chars]`: the conversation so far, each prompt and answer clipped to `chars` (Ink's preview). */
-export function historyText(entries: readonly Entry[], arg: string): string {
-  const preview = Math.max(80, Number.parseInt(arg, 10) || 400)
-  let n = 0
-
-  const lines = entries.flatMap(e => {
-    if (e.kind !== 'user' && e.kind !== 'turn') {
-      return []
-    }
-
-    const tools = e.kind === 'turn' ? e.blocks.filter(b => b.kind === 'tool').length : 0
-    const said = e.kind === 'user' ? e.text.trim() : answerText(e)
-    const body = said || (tools ? `(${tools} tool call${tools === 1 ? '' : 's'})` : '(empty)')
-    const clipped = body.length > preview ? `${body.slice(0, preview).trimEnd()}…` : body
-
-    return [`**${e.kind === 'user' ? 'You' : 'Hermes'} #${++n}**\n${clipped}`]
-  })
-
-  return lines.length ? lines.join('\n\n') : 'No conversation yet.'
 }
 
 /** `/agents` opens the hub; `pause|resume` gate new spawns gateway-wide (`delegation.pause`). */

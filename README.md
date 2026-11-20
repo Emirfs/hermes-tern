@@ -14,6 +14,7 @@ transports. Telegram, WhatsApp and field-device sessions remain owned by Hermes.
 | `/inbox` | Browse and resume messaging sessions |
 | `/pairing [list\|approve platform code\|revoke platform user]` | Inspect access requests; approve/revoke only after confirmation |
 | `/handoff platform` | Confirm and hand the current conversation to a messaging platform |
+| `/handoff omp [--cwd DIR] [ask]` | Hand the conversation to an omp agent in a new Tern tab (`tern-bridge omp`): the conversation, the device and the field-device rules go into `plugin-data/hermes-tern/handoffs/<time>-omp.md`, which the agent's first prompt names. The Hermes chat and its box get nothing. |
 | `/field [device-id]`, `/devices` | Field-device inventory and read-only status |
 
 The field panel discovers its transport from the configured `mcp_servers.field_ai` command; it does
